@@ -1,0 +1,52 @@
+# Python environment and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+node_modules/
+
+# Local sessions, uploaded files, output and development evidence
+.state/
+/source/*
+!/source/README.md
+/output/
+/review/
+/release/
+*.xlsx
+*.xls
+*.aasx
+*.zip
+aas_config.json
+*.log
+stdout.txt
+stderr.txt
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.pfx
+
+# Local binaries and packaging products
+*.exe
+*.dll
+/_internal/
+/build/
+/dist/
+
+# Historical local documents with original-data details
+/FIELD_MAPPING_REPORT.md
+/assembly_aas_modeling_plan.md
+/aas_template_download_and_usage_guide.md
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

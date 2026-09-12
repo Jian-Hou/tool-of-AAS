@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AAS Assembly Converter</title>
+  <link rel="stylesheet" href="/static/editor.css">
+  <script src="/static/editor.js" defer></script>
+</head>
+<body>
+<header>
+  <div><h1>AAS Assembly Converter</h1><p>Check data, map fields, and export traceable assembly models.</p></div>
+  <div class="actions">
+    <label class="button" for="excelInput">Load Excel<input id="excelInput" type="file" accept=".xlsx" hidden></label>
+    <button id="saveProject" disabled>Save Settings & Mappings</button>
+    <button id="generateDraft" class="primary" disabled>Export Draft</button>
+    <button id="generateStrict" disabled>Export with Strict Validation</button>
+  </div>
+</header>
+<main>
+  <div id="message" role="status" aria-live="polite" hidden></div>
+  <section class="source-bar">
+    <div><span class="label">Current file</span><strong id="filename">No Excel file loaded</strong><small id="revision"></small></div>
+    <div class="source-actions"><a href="/api/config" id="configDownload">Download Config</a><button id="refreshState">Refresh State</button></div>
+  </section>
+  <section id="summary" class="summary" aria-label="Data summary"></section>
+  <div id="dirtyNotice" class="notice" hidden>Settings or mappings have unsaved changes. They will be saved and checked before export.</div>
+  <nav aria-label="Workspace">
+    <button class="tab active" data-panel="checks">Checks</button>
+    <button class="tab" data-panel="mapping">Field Mapping</button>
+    <button class="tab" data-panel="settings">Assembly & Units</button>
+    <button class="tab" data-panel="preview">Model Preview</button>
+  </nav>
+  <section id="checks" class="panel">
+    <div class="section-heading"><h2>Data Checks</h2><span id="qualityStatus"></span></div>
+    <p id="qualityExplanation">Load an .xlsx file containing components and joint_instances to see the results here.</p>
+    <div id="issues"></div>
+  </section>
+  <section id="mapping" class="panel" hidden>
+    <div class="section-heading"><h2>Source Columns and Target Fields</h2><button id="resetBindings">Reset Mappings</button></div>
+    <p>Worksheet names are fixed. Select a source column or drag a column from the preview onto a target in the same sheet. Saved mappings are used to build the model.</p>
+    <div class="mapping-layout">
+      <div class="table-scroll"><table><thead><tr><th>Worksheet</th><th>Target field</th><th>Source column</th></tr></thead><tbody id="mappingRows"></tbody></table></div>
+      <aside><label for="sheetSelect">Source Preview</label><select id="sheetSelect"></select><div id="excelColumns"></div><div id="excelPreview" class="table-scroll"></div></aside>
+    </div>
+  </section>
+  <section id="settings" class="panel" hidden>
+    <h2>Assembly Information</h2>
+    <form id="settingsForm">
+      <div class="form-grid">
+        <label>Assembly name<input name="name" required maxlength="64"></label>
+        <label>Global asset ID (optional)<input name="asset_id" placeholder="urn:... or https://..."></label>
+        <label>Manufacturer name<input name="manufacturer_name"></label>
+        <label>Manufacturer product designation<input name="product_designation"></label>
+        <label>Manufacturer article number<input name="article_number"></label>
+        <label>Manufacturer order code<input name="order_code"></label>
+      </div>
+      <h2>Coordinate and Rotation Conventions</h2>
+      <p>Unconfirmed conventions retain the source values and produce a draft. The default XYZW order must be verified against the source.</p>
+      <div class="form-grid">
+        <label>Coordinate length unit<select name="cs_LengthUnit"><option value="">Unconfirmed</option><option>mm</option><option>cm</option><option>m</option><option>um</option></select></label>
+        <label>Source quaternion order<select name="cs_QuaternionOrder"><option>XYZW</option><option>WXYZ</option></select></label>
+        <label>Handedness<select name="cs_Handedness"><option value="">Unconfirmed</option><option value="RightHanded">Right-handed</option><option value="LeftHanded">Left-handed</option></select></label>
+        <label>Rotation direction<select name="cs_RotationDirection"><option value="">Unconfirmed</option><option value="LocalToAssembly">Local to assembly</option><option value="AssemblyToLocal">Assembly to local</option></select></label>
+        <label>Bounding box reference frame<select name="cs_BoundingBoxCoordinateSystem"><option value="">Unconfirmed</option><option value="ComponentLocal">Component local</option><option value="AssemblyGlobal">Assembly global</option></select></label>
+        <label>Axis convention<input name="cs_AxisConvention" placeholder="For example: X right, Y forward, Z up"></label>
+        <label>Origin description<input name="cs_OriginDescription"></label>
+        <label>Source of conventions<input name="cs_Source" placeholder="For example: CAD export documentation and version"></label>
+      </div>
+      <label class="checkbox"><input name="cs_Confirmed" type="checkbox">I have verified all coordinate conventions above against the data source.</label>
+      <h2>Geometry Parameter Units</h2>
+      <p>Enter only known units; leave unknown units blank. Parameters ending in _mm keep millimetres. Specify angle and length units separately.</p>
+      <div id="parameterUnits" class="form-grid"></div>
+    </form>
+  </section>
+  <section id="preview" class="panel" hidden>
+    <div class="section-heading"><h2>Output Model</h2><button id="loadPreview">Update Preview</button></div>
+    <p>The preview uses the same converter as export. Expand a node to inspect its values and references.</p>
+    <div id="modelTree">Load an Excel file to view the model.</div>
+  </section>
+</main>
+<footer><span id="busyStatus">Ready</span><span>Source files are preserved. Data and settings are stored in the local project for this browser session.</span></footer>
+</body>
+</html>
