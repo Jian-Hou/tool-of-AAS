@@ -345,6 +345,14 @@ def analyze(workbook, settings=None, bindings=None):
             except ValidationError as exc:
                 issue('error','invalid_'+col,str(exc),'components',row['_row'],col,label)
     joint_catalog = {text(r.get('joint_type')):r for r in mapped.get('joint_types',[])}
+    joint_counts = Counter(text(r.get('joint_type')) for r in joints)
+    for typ, row in joint_catalog.items():
+        if text(row.get('count')):
+            try:
+                if integer(row['count']) != joint_counts[typ]:
+                    issue('warning','count_mismatch',f'The source count for joint type {typ} does not match the number of instances.','joint_types',row['_row'],'count')
+            except ValidationError as exc:
+                issue('error','invalid_count',str(exc),'joint_types',row['_row'],'count')
     for row in joints:
         try: integer(row.get('joint_id'))
         except ValidationError as exc: issue('error','invalid_joint_id',str(exc),'joint_instances',row['_row'],'joint_id')

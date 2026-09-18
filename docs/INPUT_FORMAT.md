@@ -63,7 +63,7 @@ Endpoints use labels, not numeric IDs. `GroundedJoint` permits an empty second e
 
 `components` and `joint_instances` are mandatory. With no joints, retain an empty sheet with all joint headers; missing connections produce a warning.
 
-`joint_types` uses `joint_type`, `description`, and `count`; only `joint_type` is mandatory.
+`joint_types` uses `joint_type`, `description`, and `count`; only `joint_type` is mandatory. A supplied `count` must be an integer and is checked against the number of joint instances of that type. A mismatch produces a warning and blocks strict export.
 
 ## Minimal manual example
 

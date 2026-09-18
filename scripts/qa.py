@@ -37,8 +37,16 @@ def audit(workbook, model, settings=None, bindings=None):
             result[key]=c
         return result
     def vals(node):return {x.get('idShort'):x.get('value') for x in node.get('value',[])}
+    def check_reference(path, actual, keys):
+        expected={'type':'ModelReference','keys':[{'type':kind,'value':value} for kind,value in keys]}
+        if actual != expected:problem(path,expected,actual)
     try:
         submodels=index(model.get('submodels',[]),'submodels')
+        adid=submodels.get('AssemblyDefinition',{}).get('id')
+        tdid=submodels.get('TechnicalData',{}).get('id')
+        shells=model.get('assetAdministrationShells',[])
+        aasid=shells[0].get('id') if len(shells)==1 else None
+        if aasid is None:problems.append('Expected exactly one assembly shell.')
         ad=index(submodels.get('AssemblyDefinition',{}).get('submodelElements',[]),'AssemblyDefinition')
         td=index(submodels.get('TechnicalData',{}).get('submodelElements',[]),'TechnicalData')
         components={}
@@ -72,9 +80,14 @@ def audit(workbook, model, settings=None, bindings=None):
             param_row=next((p for p in source.get(family+'_instances',[]) if str(p['label']).strip()==label),{})
             eq(label+'/GeometryTypeCode',param_row.get('shape_type'),identity.get('GeometryTypeCode'))
             eq(label+'/SourceParameters',param_row.get('params'),parts.get('SourceParameters',{}).get('value'))
-            expected_ref=[safe_id(param_row.get('shape_type',''))]
-            actual_ref=parts.get('TypeDefinition',{}).get('value',{}).get('keys',[])
-            if not actual_ref or actual_ref[-1].get('value')!=expected_ref[0]:problem(label+'/TypeDefinition',expected_ref,actual_ref)
+            group={'pipeline':'PipelineTypes','elbow':'ElbowTypes','blackbox':'BlackboxTypes','tank':'TankTypes'}[family]
+            check_reference(label+'/TypeDefinition',parts.get('TypeDefinition',{}).get('value'),
+                            [('Submodel',adid),('SubmodelElementCollection','TypeCatalog'),
+                             ('SubmodelElementCollection',group),('SubmodelElementCollection',safe_id(param_row.get('shape_type','')))])
+            check_reference(label+'/TechnicalParameters',parts.get('TechnicalParameters',{}).get('value'),
+                            [('Submodel',tdid),('SubmodelElementCollection','TechnicalProperties'),
+                             ('SubmodelElementCollection',safe_id(label))])
+            checked+=2
             actual=vals(parameters.get(safe_id(label),{}));expected_keys=set()
             for pair in str(param_row.get('params','')).split(';'):
                 if not pair.strip():continue
@@ -94,6 +107,15 @@ def audit(workbook, model, settings=None, bindings=None):
             jid=str(int(Decimal(str(row['joint_id']))));actual=joints.get(jid,{})
             for raw,target in [('joint_type','JointType'),('side1_id','Side1Component'),('side1_sub','Side1Feature'),('side2_id','Side2Component'),('side2_sub','Side2Feature')]:
                 eq('Joint_'+jid+'/'+target,row.get(raw),actual.get(target));checked+=1
+            for side,prefix in [('side1','Side1'),('side2','Side2')]:
+                target=str(row.get(side+'_id') or '').strip()
+                ref=actual.get(prefix+'Reference')
+                if target:
+                    keys=[('Submodel',adid),('SubmodelElementCollection','Components'),('SubmodelElementCollection',safe_id(target))] if target in expected_labels else [('AssetAdministrationShell',aasid)]
+                    check_reference('Joint_'+jid+'/'+prefix+'Reference',ref,keys)
+                elif ref is not None:
+                    problem('Joint_'+jid+'/'+prefix+'Reference',None,ref)
+                checked+=1
         catalog=index(ad.get('TypeCatalog',{}).get('value',[]),'TypeCatalog')
         for family,group in [('pipeline','PipelineTypes'),('elbow','ElbowTypes'),('blackbox','BlackboxTypes'),('tank','TankTypes')]:
             definitions=index(catalog.get(group,{}).get('value',[]),group)
@@ -101,6 +123,13 @@ def audit(workbook, model, settings=None, bindings=None):
                 actual=vals(definitions.get(safe_id(row['shape_type']),{}))
                 for col,target in [('shape_type','TypeCode'),('params_needed','RequiredParameters'),('geometric_description','GeometricDescription'),('count','SourceCount')]:
                     eq(group+'/'+str(row['shape_type'])+'/'+target,row.get(col),actual.get(target),col=='count');checked+=1
+        joint_definitions=index(catalog.get('JointTypes',{}).get('value',[]),'JointTypes')
+        expected_types={safe_id(row['joint_type']) for row in source.get('joint_types',[])}
+        eq('Joint type set',sorted(expected_types),sorted(joint_definitions))
+        for row in source.get('joint_types',[]):
+            actual=vals(joint_definitions.get(safe_id(row['joint_type']),{}))
+            for col,target in [('joint_type','TypeCode'),('description','GeometricDescription'),('count','SourceCount')]:
+                eq('JointTypes/'+str(row['joint_type'])+'/'+target,row.get(col),actual.get(target),col=='count');checked+=1
         eq('Source SHA256',workbook.source_sha256,vals(ad.get('SourceData',{})).get('SHA256'))
         eq('DataQuality.Status',report['status'],vals(ad.get('DataQuality',{})).get('Status'))
     except (KeyError,TypeError,ValueError,StopIteration,SyntaxError) as exc:
