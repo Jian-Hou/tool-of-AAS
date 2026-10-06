@@ -29,6 +29,8 @@ CHILDREN = {'Submodel': 'submodelElements', 'SubmodelElementCollection': 'value'
             'Entity': 'statements', 'AnnotatedRelationshipElement': 'annotations'}
 CONTAINERS = ('Submodel', 'SubmodelElementCollection', 'SubmodelElementList', 'Entity')
 VALUE_ELEMENTS = ('Property', 'MultiLanguageProperty')
+ROW_ITEMS = ('SubmodelElementCollection', 'Entity')
+GLOBAL_ASSET = '#globalAssetId'  # column target that sets the global asset ID of an entity row
 NEW_ELEMENTS = ('Property', 'MultiLanguageProperty', 'SubmodelElementCollection', 'SubmodelElementList')
 VALUE_TYPES = tuple(member.value for member in aas_types.DataTypeDefXSD)
 RELATIONSHIPS = 'http://schemas.openxmlformats.org/package/2006/relationships'
@@ -188,6 +190,8 @@ def parse_spec(name, data):
     except Exception as exc:
         if re.search(rb'admin-shell\.io/aas/[12]/', data[:4096]):
             raise ValidationError('This is an AAS V1/V2 model. Open it in AASX Package Explorer, save it as AAS V3.0 and load it again.') from exc
+        if re.search(rb'admin-shell\.io/aas/3/[1-9]', data[:4096]):
+            raise ValidationError('This model uses AAS metamodel V3.1 or later; the tool supports V3.0. For IDTA templates, use the file without "forAASMetamodelV3.1".') from exc
         raise ValidationError('Unable to read the AAS model. Only AAS V3.0 models in XML or JSON are supported. Details: ' + str(exc)[:300]) from exc
     return jsonization.to_jsonable(env), fmt
 
@@ -393,6 +397,8 @@ def display_value(node):
         value = f"{node.get('min', '')} .. {node.get('max', '')}" if 'min' in node or 'max' in node else None
     elif kind == 'ReferenceElement':
         value = ' / '.join(k['value'] for k in (node.get('value') or {}).get('keys', [])) or None
+    elif kind == 'Entity':
+        value = node.get('globalAssetId')
     elif kind in CONTAINERS:
         value = None
     else:
@@ -461,6 +467,94 @@ def clear_values(node):
     return node
 
 
+PLACEHOLDER_ASSET = 'https://admin-shell.io/'
+LEAVES = ('Property', 'MultiLanguageProperty', 'File', 'Blob', 'ReferenceElement', 'Range')
+
+
+def template_cardinality(node):
+    """Cardinality from a template qualifier; only elements that came from a template carry one."""
+    return next((q.get('value') for q in node.get('qualifiers', []) if q.get('kind') == 'TemplateQualifier'
+                 and q.get('type') in ('SMT/Cardinality', 'Cardinality', 'Multiplicity')), None)
+
+
+def has_data(node):
+    kind = node.get('modelType')
+    if kind == 'Range':
+        return 'min' in node or 'max' in node
+    if kind in LEAVES:
+        return bool(node.get('value') or node.get('valueId'))
+    if kind == 'Entity' and node.get('globalAssetId') and not node['globalAssetId'].startswith(PLACEHOLDER_ASSET):
+        return True
+    if kind in CHILDREN:
+        return any(has_data(child) for child in items_of(node))
+    # Relationships in a template point to placeholders; other element kinds are kept as they are.
+    return kind not in ('RelationshipElement', 'AnnotatedRelationshipElement')
+
+
+def replaced_placeholder(node, siblings):
+    """An empty template element that repeats (OneToMany) and already has filled entries of the same kind,
+    such as the template's Node entity after rows were imported with it as the row structure."""
+    def same_kind(other):
+        return (other is not node and other.get('modelType') == node.get('modelType') and other.get('semanticId') == node.get('semanticId')
+                and template_cardinality(other) == template_cardinality(node) and has_data(other))
+    return template_cardinality(node) == 'OneToMany' and not has_data(node) and any(same_kind(other) for other in siblings)
+
+
+def _drop_empty_optional(node, stats):
+    key = CHILDREN.get(node.get('modelType'))
+    if not key or not node.get(key):
+        return
+    kept = []
+    for child in node[key]:
+        if (template_cardinality(child) in ('ZeroToOne', 'ZeroToMany') and not has_data(child)) or replaced_placeholder(child, node[key]):
+            stats['removed'] += 1
+            continue
+        _drop_empty_optional(child, stats)
+        kept.append(child)
+    node[key] = kept
+
+
+def _requirement_warnings(submodel, found):
+    """Collect (message pattern, path) pairs; list indices become [*] so repeated entries can be counted together."""
+    def visit(node, path):
+        kind = node.get('modelType')
+        cardinality = template_cardinality(node)
+        where = '/'.join([submodel.get('idShort', submodel['id'])] + ['[*]' if isinstance(s, int) else s for s in path])
+        listed = any(isinstance(s, int) for s in path)
+        if path and not has_data(node):
+            if cardinality in ('One', 'OneToMany'):
+                # One warning per empty mandatory element; its own children are covered by it.
+                found.append((f'Mandatory template element {where} ({cardinality}) ' + ('has no value' if kind in LEAVES else 'is empty'), listed))
+                return
+            if cardinality in ('ZeroToOne', 'ZeroToMany'):
+                return  # an unused optional group does not make its mandatory children required
+        if path and kind == 'Entity' and (node.get('globalAssetId') or '').startswith(PLACEHOLDER_ASSET):
+            found.append((f'Entity {where} still uses the template placeholder asset ID {node["globalAssetId"]}', listed))
+        for i, child in enumerate(items_of(node)):
+            if not replaced_placeholder(child, items_of(node)):
+                visit(child, path + [i if kind == 'SubmodelElementList' else child.get('idShort')])
+    visit(submodel, [])
+
+
+def finalize(env, drop_empty_optional=True):
+    """Prepare a working environment for export: optionally remove empty optional template elements,
+    report mandatory template elements without data, and remove template-only qualifiers (AASd-129)."""
+    final = copy.deepcopy(env)
+    stats = {'removed': 0}
+    if drop_empty_optional:
+        for submodel in final.get('submodels', []):
+            _drop_empty_optional(submodel, stats)
+    found = []
+    for submodel in final.get('submodels', []):
+        _requirement_warnings(submodel, found)
+    counts = {}
+    for message, listed in found:
+        counts[message] = (counts.get(message, (0, listed))[0] + 1, listed)
+    warnings = [message + (f' in {count} list entries.' if listed else '.') for message, (count, listed) in counts.items()]
+    strip_template_qualifiers(final)
+    return prune(final), {'removed': stats['removed'], 'warnings': warnings}
+
+
 def strip_template_qualifiers(node):
     # Template qualifiers such as SMT/Cardinality are only allowed inside submodel templates (AASd-129).
     if isinstance(node, dict):
@@ -499,7 +593,7 @@ def add_template_submodel(env, shell_id, template_env, submodel_id, keep_values=
     submodel = copy.deepcopy(source)
     submodel['id'], submodel['kind'] = new_id(), 'Instance'
     _replace_reference_targets(submodel, source['id'], submodel['id'])
-    strip_template_qualifiers(submodel)
+    # Template qualifiers stay in the working copy for cardinality checks; finalize() removes them before export.
     if not keep_values:
         clear_values(submodel)
     _attach(env, shell_id, prune(submodel))
@@ -606,7 +700,8 @@ def normalize_rules(rules):
             for column in columns:
                 if not isinstance(column, dict) or not text(column.get('column')) or not isinstance(column.get('path'), list) or not 1 <= len(column['path']) <= 16:
                     raise ValidationError('Each column mapping needs a column and a target path.')
-                entry = {'column': text(column['column']), 'path': [check_id_short(s) for s in column['path']]}
+                path = column['path'] if column['path'] == [GLOBAL_ASSET] else [check_id_short(s) for s in column['path']]
+                entry = {'column': text(column['column']), 'path': path}
                 if column.get('valueType'):
                     if column['valueType'] not in VALUE_TYPES:
                         raise ValidationError('Unsupported value type.')
@@ -659,7 +754,7 @@ def to_xsd(value, value_type):
 
 
 def _write(node, cell, language):
-    """Write one cell into a Property or MultiLanguageProperty; returns False for empty cells."""
+    """Write one cell into a Property, a MultiLanguageProperty or an Entity's global asset ID; returns False for empty cells."""
     if node.get('modelType') == 'Property':
         value = to_xsd(cell, node.get('valueType', 'xs:string'))
         if value is None:
@@ -671,12 +766,19 @@ def _write(node, cell, language):
             return False
         texts = [t for t in node.get('value', []) if t.get('language') != language]
         node['value'] = texts + [{'language': language, 'text': value}]
+    elif node.get('modelType') == 'Entity':
+        value = to_xsd(cell, 'xs:string')
+        if value is None:
+            return False
+        node['globalAssetId'], node['entityType'] = value, 'SelfManagedEntity'
     else:
-        raise ValidationError(f"Values can only be written to properties; the target is a {node.get('modelType')}.")
+        raise ValidationError(f"Values can only be written to properties or entity asset IDs; the target is a {node.get('modelType')}.")
     return True
 
 
 def _resolve_relative(node, path):
+    if path == [GLOBAL_ASSET]:
+        return node if node.get('modelType') == 'Entity' else None
     for segment in path:
         node = find_child(node, segment) if node is not None and node.get('modelType') != 'SubmodelElementList' else None
     return node
@@ -747,8 +849,8 @@ def _apply_rows(env, rule, index, sheet, container, stats, error):
         error(index, f'Rows can only be imported into submodels, collections, lists or entities; the target is a {kind}.', rule['sheet'])
         return
     is_list = kind == 'SubmodelElementList'
-    if is_list and container.get('typeValueListElement') != 'SubmodelElementCollection':
-        error(index, 'Rows can only be imported into lists of collections.', rule['sheet'])
+    if is_list and container.get('typeValueListElement') not in ROW_ITEMS:
+        error(index, 'Rows can only be imported into lists of collections or entities.', rule['sheet'])
         return
     if not sheet['rows']:
         # An empty sheet must not wipe the container, which would also remove a template's row structure.
@@ -757,16 +859,19 @@ def _apply_rows(env, rule, index, sheet, container, stats, error):
     prototype = None
     if rule['prototype'] is not None:
         prototype = find_child(container, rule['prototype'])
-        if prototype is None or prototype.get('modelType') != 'SubmodelElementCollection':
-            error(index, f"The row template element {rule['prototype']} is missing or is not a collection.", rule['sheet'])
+        if prototype is None or prototype.get('modelType') not in ROW_ITEMS:
+            error(index, f"The row template element {rule['prototype']} is missing or is not a collection or entity.", rule['sheet'])
             return
         prototype = clear_values(copy.deepcopy(prototype))
+    blank = {'modelType': container['typeValueListElement'] if is_list else 'SubmodelElementCollection'}
+    if blank['modelType'] == 'Entity':
+        blank['entityType'] = 'CoManagedEntity'
     items = [] if is_list or rule['mode'] == 'replace' else list(items_of(container))
     by_id = {c.get('idShort'): c for c in items}
     first_row = {}
     for row in sheet['rows']:
         if is_list:
-            item = copy.deepcopy(prototype) if prototype else {'modelType': 'SubmodelElementCollection'}
+            item = copy.deepcopy(prototype or blank)
             item.pop('idShort', None)
             items.append(item)
             stats['created'] += 1
@@ -782,11 +887,11 @@ def _apply_rows(env, rule, index, sheet, container, stats, error):
                 continue
             first_row[id_short] = row['_row']
             item = by_id.get(id_short)
-            if item is not None and item.get('modelType') != 'SubmodelElementCollection':
-                error(index, f'{id_short} already exists and is not a collection.', rule['sheet'], row['_row'], rule['key_column'])
+            if item is not None and item.get('modelType') not in ROW_ITEMS:
+                error(index, f'{id_short} already exists and is not a collection or entity.', rule['sheet'], row['_row'], rule['key_column'])
                 continue
             if item is None:
-                item = copy.deepcopy(prototype) if prototype else {'modelType': 'SubmodelElementCollection'}
+                item = copy.deepcopy(prototype or blank)
                 item['idShort'] = id_short
                 items.append(item)
                 by_id[id_short] = item
@@ -796,13 +901,13 @@ def _apply_rows(env, rule, index, sheet, container, stats, error):
         for column in rule['columns']:
             node = _resolve_relative(item, column['path'])
             if node is None:
-                if len(column['path']) != 1 or not column.get('valueType'):
+                if len(column['path']) != 1 or not column.get('valueType') or column['path'] == [GLOBAL_ASSET]:
                     error(index, 'Target ' + '/'.join(column['path']) + ' does not exist in the row element.', rule['sheet'], row['_row'], column['column'])
                     continue
                 node = {'modelType': 'Property', 'idShort': column['path'][0], 'valueType': column['valueType']}
                 if column.get('semanticId'):
                     node['semanticId'] = external_reference(column['semanticId'])
-                item.setdefault('value', []).append(node)
+                item.setdefault(CHILDREN[item['modelType']], []).append(node)
             try:
                 if _write(node, row.get(column['column']), 'en'):
                     stats['values'] += 1

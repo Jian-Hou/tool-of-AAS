@@ -14,3 +14,4 @@ All tests use synthetic data; no private workbook is required.
 - `test_app_storage.py` checks that a new upload replaces the stored input and that old exports are pruned.
 - `test_aas_mapper.py` checks the generic mapping: templates, own elements, single values, table rows, existing XML packages patched in place, value conversion errors and pre-existing metamodel problems.
 - `test_mapper_app.py` runs the mapping page's API from Excel upload to AASX download.
+- `test_official_templates.py` maps data into the official IDTA templates listed in `aas_templates/README.md`. The template files are not committed; each test is skipped when its file is missing.

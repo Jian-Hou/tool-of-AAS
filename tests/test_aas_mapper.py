@@ -1,6 +1,7 @@
 """Generic Excel-to-AAS mapping with synthetic workbooks, templates and packages built by the BaSyx SDK."""
 import copy
 import datetime
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -104,16 +105,68 @@ class MapperTests(unittest.TestCase):
         self.assertTrue(any('no saved result' in note for note in sheets['notes']['notes']))
         self.assertEqual(sheets['empty']['problem'], 'The first row contains no column headers.')
 
-    def test_template_is_instantiated_without_example_values_or_template_qualifiers(self):
+    def test_template_is_instantiated_without_example_values(self):
         env, shell_id = self.nameplate_env()
         nameplate = m.resolve(env, shell_id, target(env, shell_id, 'Nameplate'))
         self.assertEqual(nameplate['kind'], 'Instance')
         self.assertNotEqual(nameplate['id'], 'urn:template:nameplate')
         self.assertEqual(nameplate['semanticId']['keys'][0]['value'], TEMPLATE_SEMANTIC)
-        self.assertNotIn('qualifiers', str(nameplate))
         self.assertNotIn('Example AG', str(nameplate))
         self.assertEqual([c['id'] for c in env['conceptDescriptions']], ['urn:cd:manufacturer-name'])
-        self.assertEqual(m.verify(env), [])
+        # Cardinality stays in the working copy for checks and is removed from the export (AASd-129).
+        self.assertEqual([n['cardinality'] for n in m.tree(env, shell_id)][:3], [None, 'One', 'ZeroToOne'])
+        final, _ = m.finalize(env, drop_empty_optional=False)
+        self.assertNotIn('qualifiers', json.dumps(final))
+        self.assertEqual(m.verify(final), [])
+
+    def test_export_drops_empty_optional_elements_and_reports_mandatory_ones(self):
+        env, shell_id = self.nameplate_env()
+        final, info = m.finalize(env)
+        names = [n['label'] for n in m.tree(final, shell_id)]
+        self.assertEqual(names, ['Nameplate', 'ManufacturerName', 'YearOfConstruction'])
+        self.assertEqual(info['removed'], 2)
+        self.assertEqual(info['warnings'], ['Mandatory template element Nameplate/ManufacturerName (One) has no value.'])
+        kept, info = m.finalize(env, drop_empty_optional=False)
+        self.assertEqual(len(m.tree(kept, shell_id)), 8)
+        self.assertEqual((info['removed'], m.verify(final), m.verify(kept)), (0, [], []))
+
+    def test_rows_can_create_entities_for_a_bill_of_materials(self):
+        placeholder = 'https://admin-shell.io/idta/HierarchicalStructures/EntryNode/1/0'
+        q = lambda value: [{'type': 'SMT/Cardinality', 'valueType': 'xs:string', 'value': value, 'kind': 'TemplateQualifier'}]
+        empty = {'type': 'ExternalReference', 'keys': [{'type': 'GlobalReference', 'value': 'https://admin-shell.io/SMT/General/IntentionallyEmpty'}]}
+        node = {'modelType': 'Entity', 'idShort': 'Node', 'entityType': 'SelfManagedEntity', 'globalAssetId': placeholder, 'qualifiers': q('OneToMany'),
+                'statements': [{'modelType': 'Property', 'idShort': 'BulkCount', 'valueType': 'xs:unsignedLong', 'qualifiers': q('ZeroToOne')},
+                               {'modelType': 'RelationshipElement', 'idShort': 'HasPart', 'first': empty, 'second': empty, 'qualifiers': q('ZeroToMany')}]}
+        template = {'submodels': [{'modelType': 'Submodel', 'id': 'urn:template:bom', 'idShort': 'HierarchicalStructures', 'kind': 'Template', 'submodelElements': [
+            {'modelType': 'Entity', 'idShort': 'EntryNode', 'entityType': 'SelfManagedEntity', 'globalAssetId': placeholder, 'qualifiers': q('One'), 'statements': [node]},
+            {'modelType': 'Property', 'idShort': 'ArcheType', 'valueType': 'xs:string', 'qualifiers': q('One')}]}]}
+        env = m.new_environment('Line')
+        shell_id = env['assetAdministrationShells'][0]['id']
+        m.add_template_submodel(env, shell_id, template, 'urn:template:bom')
+        wb = openpyxl.Workbook()
+        wb.active.title = 'bom'
+        for row in [('part', 'asset', 'qty'), ('pipe-1', 'urn:asset:pipe-1', 2), ('valve 2', 'urn:asset:valve-2', 1)]:
+            wb.active.append(row)
+        wb.save(self.dir / 'bom.xlsx')
+        entry = target(env, shell_id, 'HierarchicalStructures', 'EntryNode')
+        rules = [{'kind': 'value', 'sheet': 'bom', 'column': 'asset', 'row': 2, 'target': entry},
+                 {'kind': 'rows', 'sheet': 'bom', 'key_column': 'part', 'prototype': 'Node', 'target': entry,
+                  'columns': [{'column': 'asset', 'path': ['#globalAssetId']}, {'column': 'qty', 'path': ['BulkCount']}]}]
+        tables = m.read_tables(self.dir / 'bom.xlsx')
+        result, report = m.apply_rules(env, shell_id, tables, rules)
+        self.assertEqual(report['errors'], [])
+        again, report = m.apply_rules(result, shell_id, tables, rules)
+        self.assertEqual((report['errors'], again), ([], result))  # the mapping stays reusable
+        final, info = m.finalize(result)
+        self.assertEqual(info['warnings'], ['Mandatory template element HierarchicalStructures/ArcheType (One) has no value.'])
+        self.assertEqual(m.verify(final), [])
+        out = self.dir / 'bom.aasx'
+        m.write_package(out, final)
+        store, _ = read_back(out)
+        entry_node = next(x for x in store if getattr(x, 'id_short', None) == 'HierarchicalStructures').get_referable('EntryNode')
+        nodes = {e.id_short: (e.global_asset_id, e.get_referable('BulkCount').value) for e in entry_node.statement}
+        self.assertEqual(nodes, {m.safe_id('pipe-1'): ('urn:asset:pipe-1', 2), m.safe_id('valve 2'): ('urn:asset:valve-2', 1)})
+        self.assertEqual(entry_node.global_asset_id, 'urn:asset:pipe-1')
 
     def test_new_aas_from_template_plus_custom_elements(self):
         env, shell_id = self.nameplate_env()
@@ -136,9 +189,10 @@ class MapperTests(unittest.TestCase):
         result, report = m.apply_rules(env, shell_id, self.tables, rules)
         self.assertEqual(report['errors'], [], report)
         self.assertEqual((report['created'], report['values']), (6, 3 + 14 + 6))
-        self.assertEqual(m.new_failures(env, result), [])
+        final, _ = m.finalize(result)
+        self.assertEqual(m.verify(final), [])
         out = self.dir / 'new.aasx'
-        m.write_package(out, result)
+        m.write_package(out, final)
         store, _ = read_back(out)
         nameplate = next(x for x in store if getattr(x, 'id_short', None) == 'Nameplate')
         self.assertEqual(nameplate.get_referable('ManufacturerName').value['de'], 'ACME GmbH')

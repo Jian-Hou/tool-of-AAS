@@ -4,6 +4,8 @@ const $=id=>document.getElementById(id);
 const VALUE_TYPES=['xs:string','xs:double','xs:float','xs:decimal','xs:integer','xs:int','xs:long','xs:short','xs:byte','xs:unsignedInt','xs:boolean','xs:date','xs:dateTime','xs:time','xs:anyURI'];
 const SHORT={Submodel:'Submodel',SubmodelElementCollection:'Collection',SubmodelElementList:'List',Property:'Property',MultiLanguageProperty:'Multi-language',Entity:'Entity'};
 const VALUE_KINDS=['Property','MultiLanguageProperty'];
+const ROW_ITEMS=['SubmodelElementCollection','Entity'];
+const GLOBAL_ASSET='#globalAssetId';
 
 function el(tag,value,cls){const node=document.createElement(tag);if(value!==undefined&&value!==null)node.textContent=String(value);if(cls)node.className=cls;return node;}
 function message(text,error=false,link){const node=$('message');node.replaceChildren(el('span',text));if(link)node.append(document.createTextNode(' '),link);node.hidden=false;node.className=error?'error':'success';}
@@ -111,7 +113,7 @@ function renderRules(){
 function renderValueForm(){
   const f=$('valueForm');fill(f.elements.sheet,sheets().map(([n])=>[n,n]));
   const columns=(state.excel?.sheets[f.elements.sheet.value]?.columns||[]).map(c=>[c,c]);fill(f.elements.column,columns);fill(f.elements.matchColumn,columns);
-  fill(f.elements.target,nodes().filter(n=>VALUE_KINDS.includes(n.modelType)).map(n=>[key(n.target),`${describe(n.target)} (${n.valueType||'multi-language'})`]));
+  fill(f.elements.target,nodes().filter(n=>VALUE_KINDS.includes(n.modelType)||n.modelType==='Entity').map(n=>[key(n.target),`${describe(n.target)} (${n.modelType==='Entity'?'entity global asset ID':n.valueType||'multi-language'})`]));
   syncValueForm();
 }
 function syncValueForm(){
@@ -119,10 +121,10 @@ function syncValueForm(){
   f.querySelector('[data-for="MultiLanguageProperty"]').hidden=nodes().find(n=>key(n.target)===f.elements.target.value)?.modelType!=='MultiLanguageProperty';
 }
 function containerNode(){return nodes().find(n=>key(n.target)===$('rowsForm').elements.target.value);}
-function prototypes(parent){return parent?nodes().filter(n=>childOf(n,parent)&&n.target.path.length===parent.target.path.length+1&&n.modelType==='SubmodelElementCollection'):[];}
+function prototypes(parent){return parent?nodes().filter(n=>childOf(n,parent)&&n.target.path.length===parent.target.path.length+1&&ROW_ITEMS.includes(n.modelType)):[];}
 function renderRowsForm(){
   const f=$('rowsForm');fill(f.elements.sheet,sheets().map(([n])=>[n,n]));
-  fill(f.elements.target,nodes().filter(n=>n.container&&(n.modelType!=='SubmodelElementList'||n.listType==='SubmodelElementCollection')).map(n=>[key(n.target),describe(n.target)+(n.modelType==='SubmodelElementList'?' (list)':'')]));
+  fill(f.elements.target,nodes().filter(n=>n.container&&(n.modelType!=='SubmodelElementList'||ROW_ITEMS.includes(n.listType))).map(n=>[key(n.target),describe(n.target)+(n.modelType==='SubmodelElementList'?' (list)':n.modelType==='Entity'?' (entity)':'')]));
   syncRowsTarget(false);
 }
 function syncRowsTarget(targetChanged){
@@ -142,11 +144,12 @@ function renderColumnMap(){
   if(parent&&f.elements.prototype.value){
     const segment=JSON.parse(f.elements.prototype.value),proto=prototypes(parent).find(n=>n.target.path.at(-1)===segment);
     if(proto)slots=nodes().filter(n=>childOf(n,proto)&&VALUE_KINDS.includes(n.modelType)).map(n=>n.target.path.slice(proto.target.path.length)).filter(p=>p.every(s=>typeof s==='string'));
+    if(proto?.modelType==='Entity')slots.unshift([GLOBAL_ASSET]);
   }
   for(const column of sheet.columns){
     const tr=el('tr'),prev=previous.get(column);tr.dataset.column=column;
     const use=el('input');use.type='checkbox';use.dataset.role='use';use.checked=prev?prev.use:true;use.setAttribute('aria-label',`Use column ${column}`);
-    const target=el('select');target.dataset.role='target';target.setAttribute('aria-label',`Target for ${column}`);fill(target,slots.map(p=>[JSON.stringify(p),p.join(' / ')]),'New property');
+    const target=el('select');target.dataset.role='target';target.setAttribute('aria-label',`Target for ${column}`);fill(target,slots.map(p=>[JSON.stringify(p),p[0]===GLOBAL_ASSET?'Entity global asset ID':p.join(' / ')]),'New property');
     const match=slots.find(p=>p.at(-1).toLowerCase()===sanitize(column).toLowerCase());
     target.value=prev&&[...target.options].some(o=>o.value===prev.target)?prev.target:(match?JSON.stringify(match):'');
     const idShort=el('input');idShort.dataset.role='idShort';idShort.value=prev?.idShort||sanitize(column);idShort.setAttribute('aria-label',`New property name for ${column}`);
@@ -162,7 +165,7 @@ function renderColumnMap(){
 function renderReport(report,tree,imported){
   const box=$('resultIssues');box.replaceChildren();
   const counts=el('div',undefined,'counts');
-  for(const [label,value] of [['Values written',report.values],['Elements created',report.created],['Rows updated',report.updated],['Errors',report.errors.length],['Warnings',report.warnings.length]]){const metric=el('div',undefined,'metric');metric.append(el('span',label),el('b',value));counts.append(metric);}
+  for(const [label,value] of [['Values written',report.values],['Elements created',report.created],['Rows updated',report.updated],['Empty optional elements left out',report.removed_optional??0],['Errors',report.errors.length],['Warnings',report.warnings.length]]){const metric=el('div',undefined,'metric');metric.append(el('span',label),el('b',value));counts.append(metric);}
   const list=el('div',undefined,'issue-list');
   for(const item of [...report.errors.map(x=>({...x,error:true})),...report.warnings]){
     const row=el('div',undefined,'issue'+(item.error?' error':''));const where=[item.rule?`Mapping ${item.rule}`:'',item.sheet,item.row?`row ${item.row}`:'',item.column].filter(Boolean).join(' · ');
@@ -205,9 +208,9 @@ $('rowsForm').addEventListener('submit',e=>{e.preventDefault();const f=e.target.
 $('rulesFile').addEventListener('change',()=>task('Loading mapping…',async()=>{const file=$('rulesFile').files[0];$('rulesFile').value='';if(!file)return;let data;
   try{data=JSON.parse(await file.text());}catch(e){throw new Error('The mapping file is not valid JSON.');}
   await apply(post('/api/mapper/rules',{rules:Array.isArray(data)?data:data.rules}),'Mapping loaded.');}));
-$('checkButton').addEventListener('click',()=>task('Checking…',async()=>{const data=await post('/api/mapper/check');state=data;render();const report=data.result.report;renderReport(report,data.result.tree,false);
+$('checkButton').addEventListener('click',()=>task('Checking…',async()=>{const data=await post('/api/mapper/check',{dropEmptyOptional:$('dropOptional').checked});state=data;render();const report=data.result.report;renderReport(report,data.result.tree,false);
   message(report.errors.length?`Check found ${report.errors.length} ${report.errors.length===1?'error':'errors'}.`:'Check passed. Review the highlighted values, then import.',!!report.errors.length);}));
-$('importButton').addEventListener('click',()=>task('Importing…',async()=>{const data=await post('/api/mapper/import');state=data;render();renderReport(data.result.report,data.result.tree,true);
+$('importButton').addEventListener('click',()=>task('Importing…',async()=>{const data=await post('/api/mapper/import',{dropEmptyOptional:$('dropOptional').checked});state=data;render();renderReport(data.result.report,data.result.tree,true);
   const link=el('a',`Download ${data.result.filename}`);link.href=data.result.download_url;link.className='button';link.id='downloadResult';message('Import finished.',false,link);}));
 fill($('elementForm').elements.valueType,VALUE_TYPES.map(t=>[t,t]));
 task('Loading…',async()=>{state=await request('/api/mapper/state');templates=(await request('/api/mapper/templates')).templates;render();});

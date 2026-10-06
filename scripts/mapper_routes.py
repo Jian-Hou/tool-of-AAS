@@ -128,7 +128,7 @@ def register(application, project_dir, folder, lock, body, csrf, prune):
             raise ValidationError('The template file was not found in the template library.')
         return m.load_source(library / name)
 
-    def run(state):
+    def run(state, data):
         workbook = tables(state)
         if not workbook:
             raise ValidationError('Load an Excel file first.')
@@ -136,11 +136,15 @@ def register(application, project_dir, folder, lock, body, csrf, prune):
             raise ValidationError('Add at least one mapping first.')
         env, shell = load_env(state), shell_of(state)
         result, report = m.apply_rules(env, shell, workbook, state['rules'])
+        # The export drops empty optional template elements on request and never contains template qualifiers.
+        final, info = m.finalize(result, data.get('dropEmptyOptional', True) is not False)
+        report['removed_optional'] = info['removed']
+        report['warnings'] += [dict(rule=None, message=w, sheet='', row=None, column='') for w in info['warnings']]
         if not report['errors']:
             known = set(state['aas']['baseline'])
             report['errors'] += [dict(rule=None, message='AAS validation: ' + failure, sheet='', row=None, column='')
-                                 for failure in m.verify(result) if failure not in known]
-        return env, shell, result, report
+                                 for failure in m.verify(final) if failure not in known]
+        return env, shell, result, final, report
 
     @application.get('/mapper')
     def mapper_page():
@@ -310,8 +314,8 @@ def register(application, project_dir, folder, lock, body, csrf, prune):
             conflict = stale(state, data.get('revision'))
             if conflict:
                 return conflict
-            env, shell, result, report = run(state)
-            return response(state, {'result': {'report': report, 'tree': m.compare_trees(m.tree(env, shell), m.tree(result, shell))}})
+            env, shell, result, final, report = run(state, data)
+            return response(state, {'result': {'report': report, 'tree': m.compare_trees(m.tree(env, shell), m.tree(final, shell))}})
 
     @application.post('/api/mapper/import')
     def mapper_import():
@@ -321,19 +325,19 @@ def register(application, project_dir, folder, lock, body, csrf, prune):
             conflict = stale(state, data.get('revision'))
             if conflict:
                 return conflict
-            env, shell, result, report = run(state)
+            env, shell, result, final, report = run(state, data)
             if report['errors']:
                 raise ValidationError('The import has errors; nothing was written.', report)
             info = state['aas']
             token = uuid.uuid4().hex
             output = workdir() / 'outputs' / (token + '.aasx')
             base = workdir() / info['source'] if info['source'] and info['spec_part'] else None
-            m.write_package(output, result, base=base, package=m.Package(None, info['spec_part'], info['format'], info['filename']))
+            m.write_package(output, final, base=base, package=m.Package(None, info['spec_part'], info['format'], info['filename']))
             filename = Path(info['filename']).stem + '.aasx'
             atomic_json(output.with_suffix('.json'), {'filename': filename})
             prune(output.parent, token)
-            tree = m.compare_trees(m.tree(env, shell), m.tree(result, shell))
-            # Later structure edits and imports continue from the imported state.
+            tree = m.compare_trees(m.tree(env, shell), m.tree(final, shell))
+            # Later structure edits and imports continue from the imported state, including the full template structure.
             atomic_json(workdir() / 'working.json', result)
             save(state)
             return response(state, {'result': {'report': report, 'tree': tree, 'download_url': '/api/mapper/download/' + token, 'filename': filename}})

@@ -26,11 +26,14 @@ Imports data from any workbook into an AAS you choose. See the [mapping guide](d
 
 - **Excel:** any sheet whose first row holds column names. Column types are guessed; formula cells use the result last saved by Excel.
 - **Target AAS:** open an existing AASX (AAS V3.0, XML or JSON; packages with several shells are supported) or create a new AAS.
-- **Official and own structures:** add submodels from the [template library](aas_templates/README.md), for example IDTA submodel templates, and add your own submodels and elements where a template is not enough.
+- **Official and own structures:** add submodels from the [template library](aas_templates/README.md), and add your own submodels and elements where a template is not enough. Tested with the official IDTA templates Digital Nameplate 3.0.2, Technical Data 2.0.2, Hierarchical Structures (Bill of Material) 1.1.2 and Contact Information 1.0.2.
 - **Mappings:**
-  - *Single value*: one cell, selected by row number or by a key column, goes into one property.
-  - *Table rows*: each Excel row becomes one collection, either with new properties or following a template's row structure, such as the entries of a list.
-- **Check before import:** every cell is converted to its target type. Errors name the mapping, sheet, row and column, and the import is refused while errors remain.
+  - *Single value*: one cell, selected by row number or by a key column, goes into one property or sets the global asset ID of an entity.
+  - *Table rows*: each Excel row becomes one collection or entity, either with new properties or following a template's row structure, such as list entries or the `Node` entities of a bill of materials.
+- **Check before import:**
+  - Every cell is converted to its target type. Errors name the mapping, sheet, row and column, and the import is refused while errors remain.
+  - Mandatory template elements that are still empty are listed as warnings.
+  - Empty optional template elements and placeholders are left out of the export (on by default).
 - **Safe output:** the result is a new AASX download. When importing into an existing package, only its AAS model part is rewritten, in its original format. Attachments, thumbnails and other submodels are copied unchanged.
 - **Reuse:** mappings can be downloaded and loaded again for the next workbook with the same layout.
 
@@ -51,11 +54,14 @@ Run the automated tests from the project root after `setup.bat`:
 .\.venv\Scripts\python.exe -B -m unittest discover -s tests -v
 ```
 
-The 33 tests use synthetic data only; see [tests/README.md](tests/README.md). In addition, randomized tests were run during development but are not part of the repository:
+The 40 tests use synthetic data. Five of them also use the official IDTA templates when those files are in `aas_templates/`, and are skipped otherwise; see [tests/README.md](tests/README.md). In addition, these checks were run during development but are not part of the repository:
 
 - **Assembly converter:** hundreds of random workbooks, single-fault injection, audit tamper detection, boundary values, and 20,000 components.
+- **Real project workbook (301 components):**
+  - The assembly export is identical to the previous version's, and the audit passes for 9,404 fields.
+  - On the mapping page, it was imported into a custom submodel, the Technical Data template, and a 301-node bill of materials, with 0 cell mismatches.
 - **Mapper:**
-  - 1,600 random AAS packages, templates, workbooks and mappings, with every imported value read back through the BaSyx SDK;
+  - 2,400 random AAS packages, templates, workbooks and mappings, with every imported value read back through the BaSyx SDK;
   - fault injection;
   - random structure edits;
   - malformed and hostile requests (XML entity expansion, external entities, path traversal, broken packages) without a server error;
@@ -65,14 +71,14 @@ The 33 tests use synthetic data only; see [tests/README.md](tests/README.md). In
 
 ### Mapping page
 
-- **Template cardinality is not enforced.** Template-only qualifiers such as `SMT/Cardinality` must be removed from instances, so the tool does not warn when a mandatory template field stays empty.
-- **Value targets** are properties and multi-language properties. Files, ranges and references cannot be filled from Excel.
+- **Value targets** are properties, multi-language properties and entity global asset IDs. Files, ranges, references and relationships cannot be filled from Excel. For example, the Nameplate's mandatory `MarkingFile` stays empty, and the `HasPart`/`IsPartOf` relationships of a bill of materials are not generated.
+- **No computed values.** Cells are written as they are, so values such as asset IDs must already exist as columns in the workbook.
+- **Cardinality checks** cover templates added on the page. An exported AAS carries no template qualifiers, so its cardinalities are unknown when it is opened again.
 - **Own elements** can be properties, multi-language properties, collections and lists of collections.
-- **Supported packages:** AAS V3.0 only. V1/V2 models must first be saved as V3.0 in AASX Package Explorer. A package must contain exactly one AAS model part.
+- **Supported packages:** AAS V3.0 only. V1/V2 models must first be saved as V3.0 in AASX Package Explorer, and IDTA templates published `forAASMetamodelV3.1` are rejected with a clear message. A package must contain exactly one AAS model part.
 - **Large containers:** the structure view shows the first 25 children of each container, and deeper entries cannot be selected as single-value targets.
 - **Import button:** it stays enabled after a failed check. The server refuses the import, and nothing is written.
-- **Template library:** it starts empty. Official IDTA templates must be added from <https://github.com/admin-shell-io/submodel-templates>.
-- **Not yet tested with real files:** neither official IDTA template files nor real project workbooks have been tested.
+- **Template library:** template files are not committed. Download the official IDTA templates listed in [aas_templates/README.md](aas_templates/README.md), or add them with **Add template file**.
 
 ### Assembly converter
 
