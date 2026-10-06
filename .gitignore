@@ -15,7 +15,6 @@ node_modules/
 !/source/README.md
 /output/
 /aas_templates/*
-!/aas_templates/README.md
 /review/
 /release/
 *.xlsx

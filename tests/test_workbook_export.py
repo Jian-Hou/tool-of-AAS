@@ -15,7 +15,7 @@ from conversion import ValidationError, analyze, build_model, read_aasx, read_wo
 from qa import audit
 from schema import default_settings
 
-# The minimal manual example from docs/INPUT_FORMAT.md.
+# A minimal workbook in the assembly input format described in README.md.
 SHEETS = {
     'components': [['assembly_id', 'label', 'tag', 'type', 'shape_type', 'coord', 'placement'],
                    [1, 'demo_pipe_001', 'DEMO', 'pipeline', 'P01', '(0,0,0)', '(0,0,0,1)|0,0,0,100,10,10']],

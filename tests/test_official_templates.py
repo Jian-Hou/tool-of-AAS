@@ -1,7 +1,7 @@
 """Checks against official IDTA submodel templates in aas_templates/.
 
 Template files are local data and are not committed, so each test is skipped when its file is absent.
-See aas_templates/README.md for the source of the files."""
+See README.md for the source of the files."""
 import datetime
 from pathlib import Path
 import sys

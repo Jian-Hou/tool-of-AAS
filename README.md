@@ -1,108 +1,92 @@
 # Excel to AASX
 
-A local web tool that turns Excel data into Asset Administration Shell (AAS) V3.0 packages. Everything runs on your machine; nothing is uploaded to a server.
+A local web tool that turns Excel data into Asset Administration Shell (AAS) V3.0 packages. Everything runs on your machine.
 
-Status: October 2026. This page describes what the tool can do today and what is still missing.
-
-## What it can do
+## Features
 
 The tool has two pages.
 
-### 1. Assembly converter (start page)
+**1. Assembly converter** (start page): converts an assembly workbook in the fixed format below into a new AAS.
+- Checks the workbook before export. Errors block the export; missing information is listed as warnings.
+- Exports either a draft that records missing information, or a strict version that requires complete data.
+- The AAS contains the submodels `TechnicalData` (IDTA Technical Data semantics) and `AssemblyDefinition` (components, positions, type catalogs, joints, data quality), and embeds the original workbook.
+- The field-mapping tab lets you choose the source column for each field and shows where it is written in the AAS.
+- Command line: `scripts/generate.py` converts; `scripts/qa.py` compares an export field by field with the workbook.
 
-Converts workbooks in the fixed [assembly input format](docs/INPUT_FORMAT.md) into a new assembly AAS.
-
-- Validates the workbook before export: required sheets and columns, unique IDs and labels, numbers, quaternions, bounding boxes, joint endpoints, type catalogs and counts.
-- Unrelated worksheets, such as notes, are ignored and listed instead of rejecting the file.
-- The field-mapping tab lets you pick the source column for each field and shows where the field is written in the AAS. An automated test keeps these paths in line with the real output.
-- **Draft export** keeps missing information visible in the output; **strict export** requires complete data.
-- Output: one AAS with the submodels `TechnicalData` (IDTA Technical Data semantics) and `AssemblyDefinition` (project-specific), parameter concept descriptions, and the original workbook embedded for traceability.
-- An independent audit (`scripts/qa.py`) compares the exported AASX field by field with the workbook.
-- Command line: `scripts/generate.py` (convert) and `scripts/qa.py` (audit).
-
-### 2. Excel to AAS mapping (`/mapper`)
-
-Imports data from any workbook into an AAS you choose. See the [mapping guide](docs/MAPPER.md).
-
-- **Excel:** any sheet whose first row holds column names. Column types are guessed; formula cells use the result last saved by Excel.
-- **Target AAS:** open an existing AASX (AAS V3.0, XML or JSON; packages with several shells are supported) or create a new AAS.
-- **Official and own structures:** add submodels from the [template library](aas_templates/README.md), and add your own submodels and elements where a template is not enough. Tested with the official IDTA templates Digital Nameplate 3.0.2, Technical Data 2.0.2, Hierarchical Structures (Bill of Material) 1.1.2 and Contact Information 1.0.2.
-- **Mappings:**
-  - *Single value*: one cell, selected by row number or by a key column, goes into one property or sets the global asset ID of an entity.
-  - *Table rows*: each Excel row becomes one collection or entity, either with new properties or following a template's row structure, such as list entries or the `Node` entities of a bill of materials.
-- **Check before import:**
-  - Every cell is converted to its target type. Errors name the mapping, sheet, row and column, and the import is refused while errors remain.
-  - Mandatory template elements that are still empty are listed as warnings.
-  - Empty optional template elements and placeholders are left out of the export (on by default).
-- **Safe output:** the result is a new AASX download. When importing into an existing package, only its AAS model part is rewritten, in its original format. Attachments, thumbnails and other submodels are copied unchanged.
-- **Reuse:** mappings can be downloaded and loaded again for the next workbook with the same layout.
+**2. Excel to AAS mapping** (`/mapper`, button **Map Excel to Any AAS**): imports any workbook into an AAS you choose.
+- **Excel:** any sheet whose first row holds column names.
+- **Target:** open an existing AASX (AAS V3.0, XML or JSON) or create a new AAS.
+- **Structure:** add submodels from official IDTA templates or your own template files, and add your own submodels and elements where a template is not enough. The structure view shows each template element's cardinality.
+- **Mapping:**
+  - *Single value*: one cell, chosen by row number or by a key column, goes into a property, a multi-language property or an entity's global asset ID.
+  - *Table rows*: each row becomes a collection or an entity. Rows can follow a template's structure, for example list entries or the `Node` entities of a bill of materials.
+  - Mappings can be saved and loaded again for the next workbook.
+- **Check:**
+  - Every cell is converted to its target type; invalid cells are reported by sheet, row and column, and block the import.
+  - Mandatory template fields that are still empty are listed as warnings.
+- **Export:**
+  - A new AASX download. Empty optional template elements are left out by default.
+  - When an existing package is updated, attachments, thumbnails and other submodels are kept unchanged.
 
 ## Quick start
 
-1. Install **Python 3.12** on Windows.
-2. Run `setup.bat` to install dependencies into `.venv`.
-3. Run `scripts/start.bat`. The browser opens the start page. If port 5000 is busy, another free port is used and printed in the terminal.
-4. Assembly data: load the `.xlsx`, review the checks, then click **Export Draft** or **Export with Strict Validation**.
-5. Any other data: click **Map Excel to Any AAS**, then load Excel, open or create the AAS, add mappings, **Check**, and **Import into AAS**.
-6. Press **Ctrl+C** in the terminal to stop the tool.
+1. Install **Python 3.12** on Windows and run `setup.bat`.
+2. Run `scripts/start.bat`; the browser opens the start page. If port 5000 is busy, the terminal shows the address used. Press **Ctrl+C** there to stop.
+3. Assembly data: load the `.xlsx`, review the checks, then click **Export Draft** or **Export with Strict Validation**.
+4. Other data: click **Map Excel to Any AAS**, load the Excel file, open or create the AAS, add mappings, then **Check** and **Import into AAS**.
 
-## Testing status
+## Assembly input format
 
-Run the automated tests from the project root after `setup.bat`:
+Use `.xlsx` with column names in the first row. Sheet names are fixed, and column names can be remapped on the field-mapping tab. Other sheets, such as notes, are ignored. Limits per sheet: 25,000 rows and 128 columns; the file may be up to 12 MB.
 
-```powershell
-.\.venv\Scripts\python.exe -B -m unittest discover -s tests -v
-```
+| Sheet | Columns |
+|---|---|
+| `components` (required) | `assembly_id` (unique integer), `label` (unique; links all sheets), `tag` (optional), `type` (`pipeline`, `elbow`, `blackbox` or `tank`), `shape_type`, `coord` `(x,y,z)`, `placement` `(qx,qy,qz,qw)\|xmin,ymin,zmin,xmax,ymax,zmax` |
+| `<type>_instances` | `assembly_id`, `label`, `shape_type`, `params` such as `length_mm=100;dims_mm=1,2,3` |
+| `<type>_types` (optional) | `shape_type`, `geometric_description`, `params_needed` (names separated by `;`), `count` |
+| `joint_instances` (required, may be empty) | `joint_id`, `joint_type`, `side1_id`, `side1_sub`, `side2_id`, `side2_sub` |
+| `joint_types` (optional) | `joint_type`, `description`, `count` |
 
-The 40 tests use synthetic data. Five of them also use the official IDTA templates when those files are in `aas_templates/`, and are skipped otherwise; see [tests/README.md](tests/README.md). In addition, these checks were run during development but are not part of the repository:
+Rules:
+- **Values:** numbers in text cells use plain decimal notation, such as `12.5` or `1.2e-3`; formulas are not allowed in these sheets.
+- **Placement:** the quaternion must have length 1, and each bounding-box minimum must not exceed its maximum.
+- **Parameters:** names ending in `_mm` are millimetres; enter other units in the tool.
+- **Joints:** endpoints are component labels or the assembly root. `GroundedJoint` may leave side 2 empty; other joints need both endpoints and features.
+- **Counts and conventions:** counts are compared with the number of instances. Coordinate conventions (unit, axes, quaternion order) are entered in the tool and recorded as unconfirmed until you confirm them.
 
-- **Assembly converter:** hundreds of random workbooks, single-fault injection, audit tamper detection, boundary values, and 20,000 components.
+## Official templates
+
+Put IDTA submodel templates into the folder `aas_templates/`, or add them on the mapping page with **Add template file**. Template files are not committed. Download them from <https://github.com/admin-shell-io/submodel-templates> (folder `published`) and use the AAS V3.0 files, not those ending in `forAASMetamodelV3.1`. Tested versions:
+- Digital Nameplate 3.0.2
+- Technical Data 2.0.2
+- Hierarchical Structures enabling Bills of Material 1.1.2
+- Contact Information 1.0.2
+
+## Testing
+
+Run `.\.venv\Scripts\python.exe -B -m unittest discover -s tests`. The 40 tests use synthetic data; the five tests for official templates are skipped when the template files are missing.
+
+Also tested during development (October 2026):
 - **Real project workbook (301 components):**
-  - The assembly export is identical to the previous version's, and the audit passes for 9,404 fields.
-  - On the mapping page, it was imported into a custom submodel, the Technical Data template, and a 301-node bill of materials, with 0 cell mismatches.
-- **Mapper:**
-  - 2,400 random AAS packages, templates, workbooks and mappings, with every imported value read back through the BaSyx SDK;
+  - The assembly export matched the previous version exactly, and the audit matched all 9,404 fields.
+  - On the mapping page, the workbook was imported into a custom submodel, the Technical Data template and a 301-node bill of materials, with no cell mismatches.
+- **Randomized tests:**
+  - Several thousand random workbooks, AAS packages, templates and mappings, with every imported value read back through the BaSyx SDK;
   - fault injection;
-  - random structure edits;
-  - malformed and hostile requests (XML entity expansion, external entities, path traversal, broken packages) without a server error;
+  - hostile uploads (XML entity attacks, path traversal, broken packages);
   - 20,000 rows.
 
-## Known limitations and open issues
+## Limitations
 
-### Mapping page
-
-- **Value targets** are properties, multi-language properties and entity global asset IDs. Files, ranges, references and relationships cannot be filled from Excel. For example, the Nameplate's mandatory `MarkingFile` stays empty, and the `HasPart`/`IsPartOf` relationships of a bill of materials are not generated.
-- **No computed values.** Cells are written as they are, so values such as asset IDs must already exist as columns in the workbook.
-- **Cardinality checks** cover templates added on the page. An exported AAS carries no template qualifiers, so its cardinalities are unknown when it is opened again.
-- **Own elements** can be properties, multi-language properties, collections and lists of collections.
-- **Supported packages:** AAS V3.0 only. V1/V2 models must first be saved as V3.0 in AASX Package Explorer, and IDTA templates published `forAASMetamodelV3.1` are rejected with a clear message. A package must contain exactly one AAS model part.
-- **Large containers:** the structure view shows the first 25 children of each container, and deeper entries cannot be selected as single-value targets.
-- **Import button:** it stays enabled after a failed check. The server refuses the import, and nothing is written.
-- **Template library:** template files are not committed. Download the official IDTA templates listed in [aas_templates/README.md](aas_templates/README.md), or add them with **Add template file**.
-
-### Assembly converter
-
-- **One AAS per file version.** The AAS ID is derived from the workbook's SHA-256 hash and the assembly name, so changing any cell produces a different AAS ID. The optional global asset ID stays stable.
-- **Project-specific submodel.** `AssemblyDefinition` has no standard IDTA semantics.
-- **Limited audit scope.** The audit checks source-derived fields only. Values from settings or derived counts, such as manufacturer data, coordinate conventions and instance counts, are not compared.
-- **Number formats.** Numbers in text cells must use plain decimal notation. Values with more than about 17 significant digits are rounded to the nearest double.
-
-### General
-
-- **State storage.** Each browser session keeps its files under `.state/`. Old session folders are not deleted automatically; each session keeps only its latest input and its last 5 exports.
-- **Long paths.** Output paths longer than 260 characters fail unless Windows long paths are enabled.
-- **Local use only.** The built-in server is for local use and binds to `127.0.0.1` only.
-
-## Project layout
-
-| Path | Content |
-|---|---|
-| `scripts/app.py` | Web application and assembly converter routes |
-| `scripts/conversion.py` | Assembly workbook reading, validation and AASX export |
-| `scripts/qa.py` | Independent audit of assembly exports |
-| `scripts/aas_mapper.py` | Generic workbook reading, AAS packages, structure edits and mapping engine |
-| `scripts/mapper_routes.py` | Web routes of the mapping page |
-| `scripts/templates/`, `scripts/static/` | Pages, scripts and styles |
-| `aas_templates/` | Local template library (template files are not committed) |
-| `docs/` | Input format and mapping guide |
-| `tests/` | Automated tests |
+- **AAS versions:** only V3.0 is supported; save V1/V2 models as V3.0 in AASX Package Explorer first.
+- **Mapping targets:**
+  - The mapping writes properties, multi-language properties and entity asset IDs.
+  - Files, ranges, references and relationships are not filled. For example, a bill of materials gets no `HasPart` links, and the Nameplate's `MarkingFile` stays empty.
+- **Cell values:**
+  - Cells are imported as they are, so values such as asset IDs must exist as columns.
+  - Values with more than about 17 significant digits are rounded to the nearest double.
+- **Cardinality:** an exported AAS no longer carries template cardinality, so the mandatory-field check only covers templates added in the current mapping project.
+- **Structure view:** only the first 25 entries of each container are shown.
+- **Assembly AAS ID:** it is derived from the workbook content and changes whenever the file changes; enter a global asset ID for a stable identity.
+- **Assembly audit:** it compares data from the workbook only, not values from settings such as manufacturer data.
+- **Local use:** the tool is for local, single-user use and listens on `127.0.0.1` only. Old session folders in `.state/` are not cleaned up automatically, and output paths over 260 characters need Windows long paths enabled.
