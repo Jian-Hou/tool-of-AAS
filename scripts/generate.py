@@ -32,6 +32,7 @@ def main(argv=None):
         else:
             print(('Validation completed' if args.check_only else 'Export completed') + (': draft; some information is incomplete.' if report['warnings'] else ': passed the implemented checks.'))
             print(f'Components: {report["counts"]["components"]}; joints: {report["counts"]["joints"]}; parameters: {report["counts"]["parameters"]}; issues to resolve: {len(report["warnings"])}.')
+            if report['ignored_sheets']:print('Ignored worksheets outside the input format: '+', '.join(report['ignored_sheets']))
             if not args.check_only:print(out.resolve())
             for issue in report['warnings']:print(f'  [{issue["code"]}] {issue["sheet"]} {issue["row"] or ""} {issue["component"]}: {issue["message"]}')
         return 0

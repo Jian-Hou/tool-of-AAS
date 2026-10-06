@@ -10,6 +10,7 @@
 <header>
   <div><h1>AAS Assembly Converter</h1><p>Check data, map fields, and export traceable assembly models.</p></div>
   <div class="actions">
+    <a class="button" href="/mapper">Map Excel to Any AAS</a>
     <label class="button" for="excelInput">Load Excel<input id="excelInput" type="file" accept=".xlsx" hidden></label>
     <button id="saveProject" disabled>Save Settings & Mappings</button>
     <button id="generateDraft" class="primary" disabled>Export Draft</button>
@@ -39,7 +40,7 @@
     <div class="section-heading"><h2>Source Columns and Target Fields</h2><button id="resetBindings">Reset Mappings</button></div>
     <p>Worksheet names are fixed. Select a source column or drag a column from the preview onto a target in the same sheet. Saved mappings are used to build the model.</p>
     <div class="mapping-layout">
-      <div class="table-scroll"><table><thead><tr><th>Worksheet</th><th>Target field</th><th>Source column</th></tr></thead><tbody id="mappingRows"></tbody></table></div>
+      <div class="table-scroll"><table><thead><tr><th>Worksheet</th><th>Field and where it is written in the AAS</th><th>Source column</th></tr></thead><tbody id="mappingRows"></tbody></table></div>
       <aside><label for="sheetSelect">Source Preview</label><select id="sheetSelect"></select><div id="excelColumns"></div><div id="excelPreview" class="table-scroll"></div></aside>
     </div>
   </section>

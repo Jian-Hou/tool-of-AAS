@@ -5,32 +5,63 @@ FAMILIES = ('pipeline', 'elbow', 'blackbox', 'tank')
 CATALOG_NAMES = dict(zip(FAMILIES, ('PipelineTypes', 'ElbowTypes', 'BlackboxTypes', 'TankTypes')))
 FIELDS = []
 
-def _add(sheet, column, target, label, required=True):
-    FIELDS.append(dict(excel_sheet=sheet, excel_column=column, aas_path=target, label=label, required=required))
+# aas_path is the stable key of a mapping target; saved configurations refer to it, so it never changes.
+# output lists where build_model actually writes the column. Placeholders: <label> component collection name,
+# <code> type code, <family> component family, <id> joint ID, <type> joint type, <parameter> parameter name.
+# Text in parentheses describes the path and is not part of it. tests/test_audit_regressions.py checks every path.
+def _add(sheet, column, target, label, required=True, output=(), note=''):
+    FIELDS.append(dict(excel_sheet=sheet, excel_column=column, aas_path=target, label=label, required=required,
+                       output=list(output), note=note))
 
-for column, target, label, required in [
-    ('assembly_id', 'Identity.ComponentId', 'Component ID', True),
-    ('label', 'Identity.Label', 'Component label / reference key', True),
-    ('tag', 'Identity.AssetTag', 'Asset tag', False),
-    ('type', 'Identity.ComponentType', 'Component family', True),
-    ('shape_type', 'Identity.ShapeTypeCode', 'Original type code', True),
-    ('coord', 'Position', 'Position (x, y, z)', True),
-    ('placement', 'OrientationAndBoundingBox', 'Orientation and bounding box (4 + 6 values)', True),
+COMPONENT = 'AssemblyDefinition/Components/<label>/'
+for column, target, label, required, output, note in [
+    ('assembly_id', 'Identity.ComponentId', 'Component ID', True, [COMPONENT + 'Identity/ComponentId'],
+     'Must match assembly_id in the instance sheet.'),
+    ('label', 'Identity.Label', 'Component label / reference key', True,
+     [COMPONENT + 'Identity/Label', 'AssemblyDefinition/Components/<label> (collection name)', 'TechnicalData/TechnicalProperties/<label> (collection name)'],
+     'Links the instance sheets and joints. Characters not allowed in names are replaced and a hash is appended.'),
+    ('tag', 'Identity.AssetTag', 'Asset tag', False, [COMPONENT + 'Identity/AssetTag'], ''),
+    ('type', 'Identity.ComponentType', 'Component family', True,
+     [COMPONENT + 'Identity/ComponentType', 'TechnicalData/ProductClassifications/<family>_<code>/ProductClassId (family part)'],
+     'Selects the instance sheet and type catalog.'),
+    ('shape_type', 'Identity.ShapeTypeCode', 'Original type code', True,
+     [COMPONENT + 'Identity/ShapeTypeCode', 'TechnicalData/ProductClassifications/<family>_<code>/ProductClassId (code part)'], ''),
+    ('coord', 'Position', 'Position (x, y, z)', True, [COMPONENT + 'Position (X, Y, Z)', COMPONENT + 'SourceCoord (original text)'], ''),
+    ('placement', 'OrientationAndBoundingBox', 'Orientation and bounding box (4 + 6 values)', True,
+     [COMPONENT + 'Orientation (Qx, Qy, Qz, Qw)', COMPONENT + 'BoundingBox (XMin to ZMax)', COMPONENT + 'SourcePlacement (original text)'], ''),
 ]:
-    _add('components', column, 'AssemblyDefinition.Components[].' + target, label, required)
+    _add('components', column, 'AssemblyDefinition.Components[].' + target, label, required, output, note)
 
 for family in FAMILIES:
-    for col, label in [('assembly_id', 'Component ID'), ('label', 'Component label'), ('shape_type', 'Geometry type'), ('params', 'Parameters')]:
-        _add(family + '_instances', col, f'TechnicalData.TechnicalProperties[{family}].{col}', label)
-    for col, label, required in [('shape_type', 'Type code', True), ('geometric_description', 'Geometry description', False),
-                                 ('params_needed', 'Required parameters', True), ('count', 'Source count', False)]:
-        _add(family + '_types', col, f'AssemblyDefinition.TypeCatalog.{CATALOG_NAMES[family]}[].{col}', label, required)
+    catalog = f'AssemblyDefinition/TypeCatalog/{CATALOG_NAMES[family]}/<code>/'
+    for col, label, output, note in [
+        ('assembly_id', 'Component ID', [], 'Not written to the AAS; must match the component\'s assembly_id.'),
+        ('label', 'Component label', ['TechnicalData/TechnicalProperties/<label> (collection name)'], 'Links this record to the component with the same label.'),
+        ('shape_type', 'Geometry type', [COMPONENT + 'Identity/GeometryTypeCode', COMPONENT + f'TypeDefinition (reference to {catalog.rstrip("/")})'], ''),
+        ('params', 'Parameters', ['TechnicalData/TechnicalProperties/<label>/<parameter> (one property per value)', COMPONENT + 'SourceParameters (original text)'],
+         'Each parameter also gets a concept description with its unit.'),
+    ]:
+        _add(family + '_instances', col, f'TechnicalData.TechnicalProperties[{family}].{col}', label, True, output, note)
+    for col, label, required, output, note in [
+        ('shape_type', 'Type code', True, [catalog + 'TypeCode'], ''),
+        ('geometric_description', 'Geometry description', False, [catalog + 'GeometricDescription'], ''),
+        ('params_needed', 'Required parameters', True, [catalog + 'RequiredParameters'], 'Also used to report missing parameters.'),
+        ('count', 'Source count', False, [catalog + 'SourceCount'], 'Compared with the number of instances.'),
+    ]:
+        _add(family + '_types', col, f'AssemblyDefinition.TypeCatalog.{CATALOG_NAMES[family]}[].{col}', label, required, output, note)
 
-for col, target in [('joint_id', 'JointId'), ('joint_type', 'JointType'), ('side1_id', 'Side1Component'),
-                    ('side1_sub', 'Side1Feature'), ('side2_id', 'Side2Component'), ('side2_sub', 'Side2Feature')]:
-    _add('joint_instances', col, 'AssemblyDefinition.Joints[].' + target, target)
-for col in ('joint_type', 'description', 'count'):
-    _add('joint_types', col, 'AssemblyDefinition.TypeCatalog.JointTypes[].' + col, col, col == 'joint_type')
+JOINT = 'AssemblyDefinition/Joints/Joint_<id>/'
+for col, target, output in [
+    ('joint_id', 'JointId', [JOINT + 'JointId']), ('joint_type', 'JointType', [JOINT + 'JointType']),
+    ('side1_id', 'Side1Component', [JOINT + 'Side1Component', JOINT + 'Side1Reference (reference to the component or the AAS)']),
+    ('side1_sub', 'Side1Feature', [JOINT + 'Side1Feature']),
+    ('side2_id', 'Side2Component', [JOINT + 'Side2Component', JOINT + 'Side2Reference (reference to the component or the AAS)']),
+    ('side2_sub', 'Side2Feature', [JOINT + 'Side2Feature']),
+]:
+    _add('joint_instances', col, 'AssemblyDefinition.Joints[].' + target, target, True, output)
+for col, element, note in [('joint_type', 'TypeCode', ''), ('description', 'GeometricDescription', ''), ('count', 'SourceCount', 'Compared with the number of joints of this type.')]:
+    _add('joint_types', col, 'AssemblyDefinition.TypeCatalog.JointTypes[].' + col, col, col == 'joint_type',
+         ['AssemblyDefinition/TypeCatalog/JointTypes/<type>/' + element], note)
 
 FIELD_BY_PATH = {field['aas_path']: field for field in FIELDS}
 DEFAULT_SETTINGS = {

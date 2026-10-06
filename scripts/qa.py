@@ -21,13 +21,16 @@ def audit(workbook, model, settings=None, bindings=None):
     def problem(path,expected,actual):
         problems.append(f'{path}: expected {expected!r}, got {actual!r}')
     def eq(path,expected,actual,numeric=False):
-        if expected in (None,'') and actual in (None,''):return
+        # Input cells are trimmed, so surrounding whitespace alone is not a data difference.
+        e,a=('' if v is None else str(v).strip() for v in (expected,actual))
+        if not e and not a:return
         if numeric:
             try:
-                e,a=Decimal(str(expected)),Decimal(str(actual))
-                if e.is_finite() and a.is_finite() and e==a:return
+                de,da=Decimal(e),Decimal(a)
+                # xs:double targets are compared at double precision; integers exactly.
+                if de.is_finite() and da.is_finite() and (de==da or numeric=='double' and float(de)==float(da)):return
             except (InvalidOperation,ValueError):pass
-        elif str(expected)==str(actual):return
+        elif e==a:return
         problem(path,expected,actual)
     def index(children,path):
         result={}
@@ -60,6 +63,9 @@ def audit(workbook, model, settings=None, bindings=None):
         parameters=index(td.get('TechnicalProperties',{}).get('value',[]),'TechnicalProperties')
         eq('Parameter group set',sorted(safe_id(s) for s in expected_labels),sorted(str(k) for k in parameters))
         checked=0
+        instances={}
+        for family in ('pipeline','elbow','blackbox','tank'):
+            for p in source.get(family+'_instances',[]):instances.setdefault((family,str(p['label']).strip()),p)
         for row in source.get('components',[]):
             label=str(row['label']).strip();parts=components.get(label,{})
             identity=vals(parts.get('Identity',{}))
@@ -74,10 +80,10 @@ def audit(workbook, model, settings=None, bindings=None):
             if settings['coordinate_system']['QuaternionOrder']=='WXYZ':q=q[1:]+q[:1]
             for group,keys,expected in [('Position',('X','Y','Z'),coords),('Orientation',('Qx','Qy','Qz','Qw'),q),('BoundingBox',('XMin','YMin','ZMin','XMax','YMax','ZMax'),placement[4:])]:
                 actual=vals(parts.get(group,{}))
-                for key,value in zip(keys,expected):eq(label+'/'+group+'/'+key,value,actual.get(key),True);checked+=1
+                for key,value in zip(keys,expected):eq(label+'/'+group+'/'+key,value,actual.get(key),'double');checked+=1
             for col,target in [('coord','SourceCoord'),('placement','SourcePlacement')]:eq(label+'/'+target,row[col],parts.get(target,{}).get('value'))
             family=str(row['type']).strip()
-            param_row=next((p for p in source.get(family+'_instances',[]) if str(p['label']).strip()==label),{})
+            param_row=instances.get((family,label),{})
             eq(label+'/GeometryTypeCode',param_row.get('shape_type'),identity.get('GeometryTypeCode'))
             eq(label+'/SourceParameters',param_row.get('params'),parts.get('SourceParameters',{}).get('value'))
             group={'pipeline':'PipelineTypes','elbow':'ElbowTypes','blackbox':'BlackboxTypes','tank':'TankTypes'}[family]
@@ -95,7 +101,7 @@ def audit(workbook, model, settings=None, bindings=None):
                 values=raw.split(',')
                 for i,value in enumerate(values):
                     dest=key if len(values)==1 else f'{key}_{i+1}';expected_keys.add(dest)
-                    eq(label+'/Parameters/'+dest,value.strip(),actual.get(dest),True);checked+=1
+                    eq(label+'/Parameters/'+dest,value.strip(),actual.get(dest),'double');checked+=1
             eq(label+'/Parameter keys',sorted(expected_keys),sorted(actual))
         joints={}
         for j in ad.get('Joints',{}).get('value',[]):
@@ -119,9 +125,14 @@ def audit(workbook, model, settings=None, bindings=None):
         catalog=index(ad.get('TypeCatalog',{}).get('value',[]),'TypeCatalog')
         for family,group in [('pipeline','PipelineTypes'),('elbow','ElbowTypes'),('blackbox','BlackboxTypes'),('tank','TankTypes')]:
             definitions=index(catalog.get(group,{}).get('value',[]),group)
+            # Codes used only by instances also get catalog entries, so check membership and codes for both sources.
+            codes={str(r['shape_type']).strip() for r in source.get(family+'_types',[])+source.get(family+'_instances',[])}
+            eq(group+' set',sorted(safe_id(c) for c in codes),sorted(definitions))
+            for code in codes:
+                eq(group+'/'+code+'/TypeCode',code,vals(definitions.get(safe_id(code),{})).get('TypeCode'));checked+=1
             for row in source.get(family+'_types',[]):
                 actual=vals(definitions.get(safe_id(row['shape_type']),{}))
-                for col,target in [('shape_type','TypeCode'),('params_needed','RequiredParameters'),('geometric_description','GeometricDescription'),('count','SourceCount')]:
+                for col,target in [('params_needed','RequiredParameters'),('geometric_description','GeometricDescription'),('count','SourceCount')]:
                     eq(group+'/'+str(row['shape_type'])+'/'+target,row.get(col),actual.get(target),col=='count');checked+=1
         joint_definitions=index(catalog.get('JointTypes',{}).get('value',[]),'JointTypes')
         expected_types={safe_id(row['joint_type']) for row in source.get('joint_types',[])}

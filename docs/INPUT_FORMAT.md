@@ -1,8 +1,8 @@
 # Excel Input Format
 
-Use the first row as column headers. Do not use merged headers or formulas. Sheet names are fixed; source columns can be mapped. Instances join by `label`, and their `assembly_id` values must agree.
+Use the first row as column headers. Do not use merged headers or formulas. Sheet names are fixed; source columns can be mapped. Other worksheets, such as notes, are ignored and listed in the check results. Instances join by `label`, and their `assembly_id` values must agree.
 
-Only `.xlsx` is supported. Limits: 12 MB compressed, 64 MB uncompressed, 32 sheets, 25,000 rows per sheet, and 128 columns per sheet.
+Only `.xlsx` is supported. Limits: 12 MB compressed, 64 MB uncompressed, 32 sheets, and 25,000 rows and 128 columns per recognized sheet.
 
 ## Components: components
 
@@ -31,7 +31,9 @@ Provide `pipeline_instances`, `elbow_instances`, `blackbox_instances`, or `tank_
 | shape_type | Instance geometry code |
 | params | `length_mm=100;outer_diameter_mm=10;inner_diameter_mm=8` |
 
-Separate parameters with semicolons and names from values with `=`. Multiple values use commas. Invalid numbers, duplicates, and normalized name collisions are rejected. Parameters must not be empty.
+Separate parameters with semicolons and names from values with `=`. Multiple values use commas. Invalid numbers, duplicates, and normalized name collisions are rejected. Parameters must not be empty. Names start with a letter, contain only ASCII letters, digits, `_`, `.`, `-` or spaces, and have at most 100 characters.
+
+Numbers in text cells, including coordinates and parameters, use plain decimal notation such as `12.5`, `-3` or `1.2e-3`. Values outside double-precision range, including nonzero values that would become zero, are rejected; values with more than about 17 significant digits are rounded to the nearest double.
 
 Names ending in `_mm` use mm. Enter other units in the interface; leave unknown units blank. Original parameter text is preserved alongside expanded values.
 
@@ -59,7 +61,7 @@ Without a formal definition, the tool records observed types and parameters and 
 | side2_id | Second component label or root name |
 | side2_sub | Second joint feature |
 
-Endpoints use labels, not numeric IDs. `GroundedJoint` permits an empty second endpoint. Other joints require both endpoint labels and features.
+Endpoints use labels, not numeric IDs. `GroundedJoint` permits an empty second endpoint. Other joints require both endpoint labels and features. A joint whose two endpoints name the same component produces a warning.
 
 `components` and `joint_instances` are mandatory. With no joints, retain an empty sheet with all joint headers; missing connections produce a warning.
 

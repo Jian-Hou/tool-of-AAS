@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Excel to AAS Mapping</title>
+  <link rel="stylesheet" href="/static/editor.css">
+  <link rel="stylesheet" href="/static/mapper.css">
+  <script src="/static/mapper.js" defer></script>
+</head>
+<body>
+<header>
+  <div><h1>Excel to AAS Mapping</h1><p>Import Excel data into an existing AAS, an official template, or an AAS you build here.</p></div>
+  <div class="actions">
+    <a class="button" href="/">Assembly Converter</a>
+    <button id="checkButton" disabled>Check</button>
+    <button id="importButton" class="primary" disabled>Import into AAS</button>
+  </div>
+</header>
+<main>
+  <div id="message" role="status" aria-live="polite" hidden></div>
+
+  <section class="step" aria-labelledby="excelHeading">
+    <div class="section-heading">
+      <h2 id="excelHeading"><span class="step-no">1</span>Excel data</h2>
+      <label class="button" for="excelFile">Load Excel<input id="excelFile" type="file" accept=".xlsx" hidden></label>
+    </div>
+    <p id="excelInfo">No Excel file loaded. Any worksheet whose first row holds column names can be used.</p>
+    <div id="excelBody" hidden>
+      <label class="field">Worksheet<select id="sheetSelect"></select></label>
+      <div id="sheetNotes"></div>
+      <div id="sheetPreview" class="table-scroll"></div>
+    </div>
+  </section>
+
+  <section class="step" aria-labelledby="aasHeading">
+    <div class="section-heading">
+      <h2 id="aasHeading"><span class="step-no">2</span>Target AAS</h2>
+      <div class="actions">
+        <label class="button" for="aasFile">Open AASX<input id="aasFile" type="file" accept=".aasx,.json" hidden></label>
+        <button id="newAasToggle">New AAS</button>
+      </div>
+    </div>
+    <form id="newAasForm" class="box" hidden>
+      <label>AAS idShort<input name="idShort" required maxlength="128" placeholder="Pump01"></label>
+      <label>Global asset ID (optional)<input name="globalAssetId" placeholder="urn:... or https://..."></label>
+      <button type="submit" class="primary">Create AAS</button>
+    </form>
+    <p id="aasInfo">Open an existing AASX package or create a new AAS.</p>
+    <div id="aasBody" hidden>
+      <label id="shellPicker" class="field" hidden>Asset administration shell<select id="shellSelect"></select></label>
+      <div id="aasProblems"></div>
+      <div class="tools">
+        <form id="templateForm" class="box">
+          <h3>Add submodel from template</h3>
+          <p>Official IDTA templates or your own. Example values and template qualifiers are removed.</p>
+          <label>Template<select name="template"></select></label>
+          <label class="checkbox"><input name="keepValues" type="checkbox">Keep example values</label>
+          <div class="row-actions">
+            <button type="submit">Add submodel</button>
+            <label class="button" for="templateFile">Add template file<input id="templateFile" type="file" accept=".aasx,.json" hidden></label>
+          </div>
+        </form>
+        <form id="submodelForm" class="box">
+          <h3>Add own submodel</h3>
+          <p>For data that no official template covers.</p>
+          <label>idShort<input name="idShort" required maxlength="128"></label>
+          <label>Semantic ID (optional)<input name="semanticId" placeholder="https://..."></label>
+          <button type="submit">Add submodel</button>
+        </form>
+        <form id="elementForm" class="box">
+          <h3>Add own element</h3>
+          <label>Parent<select name="parent"></select></label>
+          <label>Type<select name="modelType">
+            <option value="Property">Property</option>
+            <option value="MultiLanguageProperty">Multi-language property</option>
+            <option value="SubmodelElementCollection">Collection</option>
+            <option value="SubmodelElementList">List of collections</option>
+          </select></label>
+          <label>idShort<input name="idShort" maxlength="128"></label>
+          <label data-for="Property">Value type<select name="valueType"></select></label>
+          <label>Semantic ID (optional)<input name="semanticId"></label>
+          <button type="submit">Add element</button>
+        </form>
+      </div>
+      <h3>Structure</h3>
+      <div id="aasTree" class="aas-tree"></div>
+    </div>
+  </section>
+
+  <section class="step" aria-labelledby="rulesHeading">
+    <div class="section-heading">
+      <h2 id="rulesHeading"><span class="step-no">3</span>Mapping</h2>
+      <div class="actions">
+        <a class="button" href="/api/mapper/rules.json">Download mapping</a>
+        <label class="button" for="rulesFile">Load mapping<input id="rulesFile" type="file" accept=".json" hidden></label>
+      </div>
+    </div>
+    <div id="rulesList"></div>
+    <div class="rule-forms">
+      <form id="valueForm" class="box">
+        <h3>Single value</h3>
+        <p>One Excel cell → one property.</p>
+        <label>Worksheet<select name="sheet"></select></label>
+        <label>Column<select name="column"></select></label>
+        <label>Select the row by<select name="rowMode"><option value="row">Excel row number</option><option value="match">Value in another column</option></select></label>
+        <label data-mode="row">Excel row number<input name="row" type="number" min="2" value="2"></label>
+        <label data-mode="match">Match column<select name="matchColumn"></select></label>
+        <label data-mode="match">Match value<input name="matchValue"></label>
+        <label>Target property<select name="target"></select></label>
+        <label data-for="MultiLanguageProperty">Language<input name="language" value="en"></label>
+        <button type="submit">Add mapping</button>
+      </form>
+      <form id="rowsForm" class="box">
+        <h3>Table rows</h3>
+        <p>Each Excel row → one collection; selected columns → its properties.</p>
+        <label>Worksheet<select name="sheet"></select></label>
+        <label>Target container<select name="target"></select></label>
+        <label>Row structure<select name="prototype"></select></label>
+        <label data-for="named">Name each row by column<select name="keyColumn"></select></label>
+        <label data-for="named">Existing rows<select name="mode"><option value="merge">Update by name, keep others</option><option value="replace">Replace all</option></select></label>
+        <p data-for="list" class="hint">Lists are refilled with one entry per Excel row.</p>
+        <div class="table-scroll"><table><thead><tr><th>Use</th><th>Excel column</th><th>Target in row</th><th>New property</th><th>Value type</th></tr></thead><tbody id="columnMap"></tbody></table></div>
+        <button type="submit">Add mapping</button>
+      </form>
+    </div>
+  </section>
+
+  <section class="step" aria-labelledby="resultHeading">
+    <div class="section-heading"><h2 id="resultHeading"><span class="step-no">4</span>Check and import</h2></div>
+    <p id="resultInfo">Check shows every value that will be written. Import writes a new AASX; the opened file is not changed.</p>
+    <div id="resultIssues"></div>
+    <div id="resultTree" class="aas-tree" hidden></div>
+  </section>
+</main>
+<footer><span id="busyStatus">Ready</span><span>Data stays in the local project for this browser session.</span></footer>
+</body>
+</html>

@@ -25,6 +25,8 @@ MAX_ZIP_BYTES = 64 * 1024 * 1024
 MAX_ROWS = 25000
 TD = 'https://admin-shell.io/ZVEI/TechnicalData/'
 RESERVED = {'CON', 'PRN', 'AUX', 'NUL'} | {f'{p}{i}' for p in ('COM', 'LPT') for i in range(1, 10)}
+KNOWN_SHEETS = frozenset(field['excel_sheet'] for field in FIELDS)
+DECIMAL = re.compile(r'[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?', re.ASCII)
 
 class ValidationError(ValueError):
     def __init__(self, message, report=None):
@@ -38,24 +40,30 @@ class WorkbookData:
     source_name: str
     source_sha256: str
     source_bytes: bytes
+    ignored_sheets: tuple = ()
 
 def text(value):
     return '' if value is None else str(value).strip()
 
+def plain_number(value):
+    # Text cells must use plain decimal notation; Python would also accept 1_000 or non-ASCII digits.
+    return not isinstance(value, str) or DECIMAL.fullmatch(text(value)) is not None
+
 def number(value):
     try:
-        if isinstance(value, bool) or not text(value):
+        if isinstance(value, bool) or not text(value) or not plain_number(value):
             raise ValueError()
         result = float(value)
-        if not math.isfinite(result):
+        # Reject overflow to infinity and underflow of a nonzero value to zero.
+        if not math.isfinite(result) or (result == 0 and Decimal(text(value)) != 0):
             raise ValueError()
         return result
     except (ValueError, TypeError, OverflowError):
-        raise ValidationError(f'Expected a finite number; got {value!r}') from None
+        raise ValidationError(f'Expected a finite decimal number within double-precision range; got {value!r}') from None
 
 def integer(value):
     try:
-        if isinstance(value, bool) or not text(value):
+        if isinstance(value, bool) or not text(value) or not plain_number(value):
             raise InvalidOperation()
         result = Decimal(str(value))
         if not result.is_finite() or result != result.to_integral_value():
@@ -105,8 +113,9 @@ def parse_params(value):
         if '=' not in part:
             raise ValidationError(f'Expected parameter name=value: {part!r}')
         key, raw = [p.strip() for p in part.split('=', 1)]
-        if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_. -]*', key) or key in result:
-            raise ValidationError(f'Invalid or duplicate parameter name: {key!r}')
+        # The 100-character limit keeps expanded names within the 128-character AAS idShort limit.
+        if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_. -]{0,99}', key) or key in result:
+            raise ValidationError(f'Invalid or duplicate parameter name (ASCII letters, digits, "_", ".", "-" or spaces; at most 100 characters): {key!r}')
         vals = [number(v) for v in raw.split(',')]
         expanded = [param_id(key)] if len(vals) == 1 else [f'{param_id(key)}_{i+1}' for i in range(len(vals))]
         if any(k in ids for k in expanded):
@@ -133,11 +142,15 @@ def read_workbook(path, source_name=None):
         raise
     except Exception as exc:
         raise ValidationError('Unable to read Excel. Check that the file is a valid .xlsx workbook.') from exc
-    sheets, headers, iterator = {}, {}, None
+    sheets, headers, ignored, iterator = {}, {}, [], None
     try:
         if len(wb.sheetnames) > 32:
             raise ValidationError('The workbook contains more than 32 worksheets.')
         for ws in wb:
+            # Notes or helper sheets are not part of the input format and are never read.
+            if ws.title not in KNOWN_SHEETS:
+                ignored.append(ws.title)
+                continue
             if (ws.max_row or 0) > MAX_ROWS or (ws.max_column or 0) > 128:
                 raise ValidationError(f'{ws.title} exceeds the supported limits (25,000 rows / 128 columns).')
             iterator = ws.iter_rows()
@@ -172,7 +185,7 @@ def read_workbook(path, source_name=None):
         wb.close()
     if 'components' not in sheets or 'joint_instances' not in sheets:
         raise ValidationError('The components and joint_instances worksheets are required. Sheet names are fixed; column names can be mapped.')
-    return WorkbookData(sheets, headers, source_name or path.name, hashlib.sha256(payload).hexdigest(), payload)
+    return WorkbookData(sheets, headers, source_name or path.name, hashlib.sha256(payload).hexdigest(), payload, tuple(ignored))
 
 def normalize_settings(settings=None):
     result = default_settings()
@@ -370,6 +383,8 @@ def analyze(workbook, settings=None, bindings=None):
                 issue('error','unresolved_joint',f'Joint component {target} does not exist.','joint_instances',row['_row'],side+'_id')
             if typ != 'GroundedJoint' and not text(row.get(side+'_sub')):
                 issue('error','missing_joint_feature',f'{side} has no joint feature.','joint_instances',row['_row'],side+'_sub')
+        if text(row.get('side1_id')) and text(row.get('side1_id')) == text(row.get('side2_id')):
+            issue('warning','self_joint','Both joint endpoints reference the same component.','joint_instances',row['_row'],'side2_id',text(row.get('side1_id')))
     for key, label in [('manufacturer_name','Manufacturer name'),('product_designation','Manufacturer product designation'),('article_number','Manufacturer article number'),('order_code','Manufacturer order code')]:
         if not settings[key]:
             issue('warning','manufacturer_missing',f'{label} was not provided. The field is retained without a value; template information is incomplete.',field=key)
@@ -384,7 +399,7 @@ def analyze(workbook, settings=None, bindings=None):
         'errors': [i for i in issues if i['severity']=='error'], 'warnings': [i for i in issues if i['severity']=='warning'],
         'counts': {'components':len(comps),'joints':len(joints),'parameters':sum(len(v) for p in parsed.values() for v in p.values()),
                    'components_missing_parameters':len(missing),'missing_parameter_fields':sum(map(len,missing.values()))},
-        'parameter_names':param_names,
+        'parameter_names':param_names, 'ignored_sheets':list(workbook.ignored_sheets),
     }
     context = dict(sheets=mapped, params=parsed, placements=placements, coords=coords, missing=missing,catalog=catalog)
     return report, context, settings, bindings
@@ -515,7 +530,8 @@ def build_model(workbook, settings=None, bindings=None, strict=False):
                 keys=[('AssetAdministrationShell',aasid)] if target in ('Assembly001',name) and target not in instance_by_label else adkey+[('SubmodelElementCollection','Components'),('SubmodelElementCollection',safe_id(target))]
                 children.append(reference(prefix+'Reference',keys))
             if text(row[side+'_sub']):children.append(prop(prefix+'Feature',row[side+'_sub']))
-        joints.append(coll('Joint_'+str(integer(row['joint_id'])),children))
+        # safe_id keeps Joint_1 unchanged and makes negative or very long IDs valid idShorts.
+        joints.append(coll(safe_id('Joint_'+str(integer(row['joint_id']))),children))
     cs=settings['coordinate_system']
     cs_props=[prop(k,v) for k,v in cs.items() if k!='Confirmed']
     cs_props += [prop('ConventionStatus','ConfirmedByUser' if cs['Confirmed'] else 'Unconfirmed'),
@@ -547,13 +563,23 @@ def validate_model(model):
         raise ValidationError('AAS metamodel validation failed: '+'; '.join(failures[:10]))
     # Check referential integrity independently from the SDK's structural rules.
     objects={o['id']:o for group in ('assetAdministrationShells','submodels','conceptDescriptions') for o in model.get(group,[])}
+    indexes={}
+    def find(parent,id_short):
+        # Index each element list once; a linear search per reference is quadratic for large assemblies.
+        items=parent.get('submodelElements',parent.get('value',[]))
+        if not isinstance(items,list):return None
+        lookup=indexes.get(id(items))
+        if lookup is None:
+            lookup=indexes[id(items)]={}
+            for item in items:
+                if isinstance(item,dict):lookup.setdefault(item.get('idShort'),item)
+        return lookup.get(id_short)
     def walk(node):
         if isinstance(node,dict):
             if node.get('type')=='ModelReference':
                 keys=node['keys'];target=objects.get(keys[0]['value'])
                 for key in keys[1:]:
-                    candidates=target.get('submodelElements',target.get('value',[])) if target else []
-                    target=next((c for c in candidates if c.get('idShort')==key['value']),None)
+                    target=find(target,key['value']) if target else None
                 if target is None: raise ValidationError('Unresolved internal AAS reference: '+str(keys))
             for child in node.values():walk(child)
         elif isinstance(node,list):

@@ -13,8 +13,10 @@ from werkzeug.exceptions import HTTPException
 from conversion import (ValidationError, read_workbook, analyze, build_model, write_aasx,
                         normalize_settings, normalize_bindings, atomic_json)
 from schema import default_settings, default_bindings, mapping_contract
+import mapper_routes
 
 PROJECT_DIR=Path(__file__).resolve().parent.parent
+KEEP_OUTPUTS=5
 
 def create_app(project_dir=None, testing=False):
     project_dir=Path(project_dir or PROJECT_DIR).resolve()
@@ -27,7 +29,7 @@ def create_app(project_dir=None, testing=False):
         except FileExistsError:pass
     application=Flask(__name__)
     application.config.update(SECRET_KEY=key_path.read_text(encoding='ascii'),TESTING=testing,
-                              MAX_CONTENT_LENGTH=12*1024*1024,SESSION_COOKIE_HTTPONLY=True,
+                              MAX_CONTENT_LENGTH=256*1024*1024,SESSION_COOKIE_HTTPONLY=True,
                               SESSION_COOKIE_SAMESITE='Strict',TRUSTED_HOSTS=['localhost','127.0.0.1','[::1]'])
     locks={};lock_guard=threading.Lock()
 
@@ -62,6 +64,17 @@ def create_app(project_dir=None, testing=False):
     def save_state(state):
         state['revision']+=1
         atomic_json(folder()/'project.json',state)
+
+    def remove(*paths):
+        for path in paths:
+            try:path.unlink(missing_ok=True)
+            except OSError:pass  # Skip files that are still open, e.g. by a running download.
+
+    def prune_outputs(directory,current):
+        # Keep the new export and the most recent earlier ones; older download links expire.
+        older=sorted((p for p in directory.glob('*.aasx') if re.fullmatch('[0-9a-f]{32}',p.stem) and p.stem!=current),
+                     key=lambda p:p.stat().st_mtime_ns,reverse=True)
+        for path in older[KEEP_OUTPUTS-1:]:remove(path,path.with_suffix('.json'))
 
     def workbook_for(state):
         if not state['input']:raise ValidationError('Load an Excel file first.')
@@ -119,7 +132,7 @@ def create_app(project_dir=None, testing=False):
 
     @application.errorhandler(HTTPException)
     def http_error(exc):
-        message='The file exceeds the 12 MB limit.' if exc.code==413 else exc.description
+        message='The upload exceeds the 256 MB limit.' if exc.code==413 else exc.description
         return jsonify(error=message),exc.code
 
     @application.errorhandler(Exception)
@@ -157,6 +170,8 @@ def create_app(project_dir=None, testing=False):
                 analyze(workbook,candidate['settings'],candidate['bindings'])
                 os.replace(tmp,folder()/candidate['input'])
                 save_state(candidate)
+                previous=state['input']
+                if isinstance(previous,str) and re.fullmatch(r'[0-9a-f]{32}\.xlsx',previous):remove(folder()/previous)
                 return jsonify(state_response(candidate))
             finally:Path(tmp).unlink(missing_ok=True)
 
@@ -204,6 +219,7 @@ def create_app(project_dir=None, testing=False):
             output=folder()/'outputs'/(token+'.aasx')
             write_aasx(model,output,workbook,report,state['settings'],state['bindings'])
             atomic_json(output.with_suffix('.json'),{'name':state['settings']['name'],'revision':state['revision']})
+            prune_outputs(output.parent,token)
             return jsonify(status=report['status'],report=report,counts=report['counts'],download_url='/api/download/'+token,
                            filename=state['settings']['name']+'.aasx',revision=state['revision'])
 
@@ -230,6 +246,8 @@ def create_app(project_dir=None, testing=False):
             model,report=build_model(workbook_for(state),state['settings'],state['bindings'])
             return jsonify(model=model,report=report,revision=state['revision'])
 
+    mapper_routes.register(application,project_dir=project_dir,folder=folder,lock=lock,body=body,
+                           csrf=lambda:load_state()['csrf'],prune=prune_outputs)
     return application
 
 def main():

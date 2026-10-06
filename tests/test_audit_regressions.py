@@ -2,13 +2,14 @@
 import copy
 import hashlib
 from pathlib import Path
+import re
 import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from conversion import WorkbookData, ValidationError, analyze, build_model
 from qa import audit
-from schema import default_settings
+from schema import FIELDS, default_settings
 
 
 def children(node):
@@ -120,6 +121,82 @@ class AuditRegressionTests(unittest.TestCase):
         extra['idShort'] = 'Side2Reference'
         joint['value'].append(extra)
         self.assert_rejected(changed)
+
+    def test_displayed_output_paths_exist_in_the_model(self):
+        values = {'components': {'<label>': 'pipe_1', '<family>': 'pipeline', '<code>': 'P01'},
+                  'pipeline_instances': {'<label>': 'pipe_1', '<code>': 'P01', '<parameter>': 'length_mm'},
+                  'elbow_instances': {'<label>': 'elbow_1', '<code>': 'P01', '<parameter>': 'length_mm'},
+                  'pipeline_types': {'<code>': 'P01'}, 'elbow_types': {'<code>': 'P01'},
+                  'joint_instances': {'<id>': '2'}, 'joint_types': {'<type>': 'Fixed'}}
+        submodels = {s['idShort']: s for s in self.model['submodels']}
+        checked = 0
+        for field in FIELDS:
+            self.assertTrue(field['output'] or field['note'], field['aas_path'])
+            for text in field['output'] if field['excel_sheet'] in values else []:
+                for path in [text.split(' (')[0]] + re.findall(r'reference to (\S+)\)', text):
+                    for placeholder, value in values[field['excel_sheet']].items():
+                        path = path.replace(placeholder, value)
+                    with self.subTest(field=field['aas_path'], path=path):
+                        self.assertNotIn('<', path)
+                        segments = path.split('/')
+                        node = submodels[segments[0]]
+                        for segment in segments[1:]:
+                            items = node.get('submodelElements', node.get('value', []))
+                            node = next((c for c in items if c.get('idShort') == segment), None) if isinstance(items, list) else None
+                            self.assertIsNotNone(node, path)
+                    checked += 1
+        self.assertGreater(checked, 40)
+
+    def test_surrounding_whitespace_is_not_a_data_mismatch(self):
+        for sheet in ('components', 'pipeline_instances'):
+            self.workbook.sheets[sheet][0]['label'] = ' pipe_1 '
+        self.workbook.sheets['components'][0]['type'] = 'pipeline '
+        self.workbook.sheets['joint_instances'][1]['side1_id'] = 'pipe_1 '
+        model, _ = build_model(self.workbook, self.settings, strict=True)
+        result = audit(self.workbook, model, self.settings)
+        self.assertTrue(result['data_match'], result['errors'])
+
+    def test_self_joint_warns_and_blocks_strict_export(self):
+        self.workbook.sheets['joint_instances'][1]['side2_id'] = 'pipe_1'
+        report = analyze(self.workbook, self.settings)[0]
+        self.assertTrue(any(item['code'] == 'self_joint' for item in report['warnings']))
+        with self.assertRaises(ValidationError):
+            build_model(self.workbook, self.settings, strict=True)
+
+    def test_observed_only_catalog_entries_are_audited(self):
+        del self.workbook.sheets['pipeline_types']
+        model, _ = build_model(self.workbook, self.settings)
+        self.assertTrue(audit(self.workbook, model, self.settings)['data_match'])
+        changed = copy.deepcopy(model)
+        definition = children(children(assembly(changed)['TypeCatalog'])['PipelineTypes'])['P01']
+        children(definition)['TypeCode']['value'] = 'Wrong'
+        self.assert_rejected(changed)
+
+    def test_negative_and_long_joint_ids_export(self):
+        for joint_id in (-5, 10 ** 130):
+            with self.subTest(joint_id=joint_id):
+                self.workbook.sheets['joint_instances'][1]['joint_id'] = joint_id
+                model, _ = build_model(self.workbook, self.settings, strict=True)
+                self.assertTrue(audit(self.workbook, model, self.settings)['data_match'])
+
+    def test_values_beyond_double_precision_round_without_audit_failure(self):
+        self.workbook.sheets['pipeline_instances'][0]['params'] = 'length_mm=3.14159265358979323846'
+        model, _ = build_model(self.workbook, self.settings, strict=True)
+        self.assertTrue(audit(self.workbook, model, self.settings)['data_match'])
+
+    def test_unrepresentable_numbers_and_names_are_rejected_by_checks(self):
+        for sheet, column, value, code in [
+            ('pipeline_instances', 'params', 'length_mm=1e-400', 'invalid_params'),
+            ('pipeline_instances', 'params', 'p' + 'a' * 120 + '=1', 'invalid_params'),
+            ('components', 'coord', '(1_000,0,0)', 'invalid_coord'),
+            ('components', 'coord', '(١,٢,٣)', 'invalid_coord'),
+            ('components', 'assembly_id', '1_000', 'invalid_assembly_id'),
+        ]:
+            with self.subTest(value=value):
+                workbook, settings = fixture()
+                workbook.sheets[sheet][0][column] = value
+                report = analyze(workbook, settings)[0]
+                self.assertIn(code, {item['code'] for item in report['errors']})
 
     def test_component_references_must_point_to_the_correct_target(self):
         for field, wrong_component in [('TypeDefinition', 'elbow_1'), ('TechnicalParameters', 'pipe_2')]:
