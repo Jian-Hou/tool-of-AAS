@@ -1,7 +1,4 @@
-"""Checks against official IDTA submodel templates in aas_templates/.
-
-Template files are local data and are not committed, so each test is skipped when its file is absent.
-See README.md for the source of the files."""
+"""Official template tests; skipped without files."""
 import datetime
 from pathlib import Path
 import sys
@@ -11,9 +8,9 @@ import unittest
 import openpyxl
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-import aas_mapper as m  # noqa: E402
-from conversion import ValidationError  # noqa: E402
-from test_aas_mapper import read_back  # noqa: E402
+import aas_mapper as m
+from conversion import ValidationError
+from test_aas_mapper import read_back
 
 LIBRARY = Path(__file__).resolve().parents[1] / 'aas_templates'
 NAMEPLATE = LIBRARY / 'IDTA_02006-3-0-2_DigitalNameplate.aasx'

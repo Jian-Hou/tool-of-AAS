@@ -1,4 +1,4 @@
-"""Audit output against source values; never infer success from record counts alone."""
+"""Check an export against its workbook."""
 import argparse
 import ast
 import json
@@ -21,13 +21,13 @@ def audit(workbook, model, settings=None, bindings=None):
     def problem(path,expected,actual):
         problems.append(f'{path}: expected {expected!r}, got {actual!r}')
     def eq(path,expected,actual,numeric=False):
-        # Input cells are trimmed, so surrounding whitespace alone is not a data difference.
+        # Ignore spaces.
         e,a=('' if v is None else str(v).strip() for v in (expected,actual))
         if not e and not a:return
         if numeric:
             try:
                 de,da=Decimal(e),Decimal(a)
-                # xs:double targets are compared at double precision; integers exactly.
+                # Allow rounding.
                 if de.is_finite() and da.is_finite() and (de==da or numeric=='double' and float(de)==float(da)):return
             except (InvalidOperation,ValueError):pass
         elif e==a:return
@@ -71,7 +71,7 @@ def audit(workbook, model, settings=None, bindings=None):
             identity=vals(parts.get('Identity',{}))
             for raw,target in [('assembly_id','ComponentId'),('label','Label'),('tag','AssetTag'),('type','ComponentType'),('shape_type','ShapeTypeCode')]:
                 eq(label+'/Identity/'+target,row.get(raw),identity.get(target),raw=='assembly_id');checked+=1
-            # Parse raw source tuples independently of the converter implementation.
+            # Parse cells separately.
             coords=list(ast.literal_eval(str(row['coord'])))
             placement=[]
             for part in str(row['placement']).split('|'):
@@ -125,7 +125,7 @@ def audit(workbook, model, settings=None, bindings=None):
         catalog=index(ad.get('TypeCatalog',{}).get('value',[]),'TypeCatalog')
         for family,group in [('pipeline','PipelineTypes'),('elbow','ElbowTypes'),('blackbox','BlackboxTypes'),('tank','TankTypes')]:
             definitions=index(catalog.get(group,{}).get('value',[]),group)
-            # Codes used only by instances also get catalog entries, so check membership and codes for both sources.
+            # Also instance-only codes.
             codes={str(r['shape_type']).strip() for r in source.get(family+'_types',[])+source.get(family+'_instances',[])}
             eq(group+' set',sorted(safe_id(c) for c in codes),sorted(definitions))
             for code in codes:

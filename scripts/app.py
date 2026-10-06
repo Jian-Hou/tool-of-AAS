@@ -1,4 +1,4 @@
-"""Local web application: isolated projects, revision checks and safe uploads."""
+"""Local web app."""
 import json
 import os
 import re
@@ -68,10 +68,10 @@ def create_app(project_dir=None, testing=False):
     def remove(*paths):
         for path in paths:
             try:path.unlink(missing_ok=True)
-            except OSError:pass  # Skip files that are still open, e.g. by a running download.
+            except OSError:pass  # still in use
 
     def prune_outputs(directory,current):
-        # Keep the new export and the most recent earlier ones; older download links expire.
+        # Keep the newest exports.
         older=sorted((p for p in directory.glob('*.aasx') if re.fullmatch('[0-9a-f]{32}',p.stem) and p.stem!=current),
                      key=lambda p:p.stat().st_mtime_ns,reverse=True)
         for path in older[KEEP_OUTPUTS-1:]:remove(path,path.with_suffix('.json'))

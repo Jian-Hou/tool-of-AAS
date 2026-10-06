@@ -1,4 +1,4 @@
-"""Web routes for the generic Excel-to-AAS mapper; state is kept per browser session next to the assembly project."""
+"""Mapping page routes."""
 import json
 import os
 import re
@@ -64,7 +64,7 @@ def register(application, project_dir, folder, lock, body, csrf, prune):
         result = {'revision': state['revision'], 'csrf': csrf(), 'rules': state['rules'], 'excel': None, 'aas': None}
         workbook = tables(state)
         if workbook:
-            # JSON objects are serialized with sorted keys, so the workbook's sheet order is sent separately.
+            # Keep sheet order.
             result['excel'] = {'filename': state['excel']['filename'], 'sheets': m.table_summary(workbook), 'order': list(workbook.sheets)}
         if state['aas']:
             env, info = load_env(state), state['aas']
@@ -136,7 +136,7 @@ def register(application, project_dir, folder, lock, body, csrf, prune):
             raise ValidationError('Add at least one mapping first.')
         env, shell = load_env(state), shell_of(state)
         result, report = m.apply_rules(env, shell, workbook, state['rules'])
-        # The export drops empty optional template elements on request and never contains template qualifiers.
+        # Export version.
         final, info = m.finalize(result, data.get('dropEmptyOptional', True) is not False)
         report['removed_optional'] = info['removed']
         report['warnings'] += [dict(rule=None, message=w, sheet='', row=None, column='') for w in info['warnings']]
@@ -337,7 +337,7 @@ def register(application, project_dir, folder, lock, body, csrf, prune):
             atomic_json(output.with_suffix('.json'), {'filename': filename})
             prune(output.parent, token)
             tree = m.compare_trees(m.tree(env, shell), m.tree(final, shell))
-            # Later structure edits and imports continue from the imported state, including the full template structure.
+            # Keep full result.
             atomic_json(workdir() / 'working.json', result)
             save(state)
             return response(state, {'result': {'report': report, 'tree': tree, 'download_url': '/api/mapper/download/' + token, 'filename': filename}})

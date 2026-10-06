@@ -1,4 +1,4 @@
-"""Generic Excel-to-AAS mapping with synthetic workbooks, templates and packages built by the BaSyx SDK."""
+"""Mapper tests."""
 import copy
 import datetime
 import json
@@ -13,10 +13,10 @@ from basyx.aas import model
 from basyx.aas.adapter.aasx import AASXReader, AASXWriter, DictSupplementaryFileContainer
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-import aas_mapper as m  # noqa: E402
-from conversion import ValidationError, build_model, read_workbook, write_aasx  # noqa: E402
-from schema import default_settings  # noqa: E402
-from test_workbook_export import minimal_workbook  # noqa: E402
+import aas_mapper as m
+from conversion import ValidationError, build_model, read_workbook, write_aasx
+from schema import default_settings
+from test_workbook_export import minimal_workbook
 
 TEMPLATE_SEMANTIC = 'https://example.org/sm/Nameplate/1/0'
 
@@ -113,7 +113,7 @@ class MapperTests(unittest.TestCase):
         self.assertEqual(nameplate['semanticId']['keys'][0]['value'], TEMPLATE_SEMANTIC)
         self.assertNotIn('Example AG', str(nameplate))
         self.assertEqual([c['id'] for c in env['conceptDescriptions']], ['urn:cd:manufacturer-name'])
-        # Cardinality stays in the working copy for checks and is removed from the export (AASd-129).
+        # Export has no template markers.
         self.assertEqual([n['cardinality'] for n in m.tree(env, shell_id)][:3], [None, 'One', 'ZeroToOne'])
         final, _ = m.finalize(env, drop_empty_optional=False)
         self.assertNotIn('qualifiers', json.dumps(final))
@@ -156,7 +156,7 @@ class MapperTests(unittest.TestCase):
         result, report = m.apply_rules(env, shell_id, tables, rules)
         self.assertEqual(report['errors'], [])
         again, report = m.apply_rules(result, shell_id, tables, rules)
-        self.assertEqual((report['errors'], again), ([], result))  # the mapping stays reusable
+        self.assertEqual((report['errors'], again), ([], result))  # reusable
         final, info = m.finalize(result)
         self.assertEqual(info['warnings'], ['Mandatory template element HierarchicalStructures/ArcheType (One) has no value.'])
         self.assertEqual(m.verify(final), [])

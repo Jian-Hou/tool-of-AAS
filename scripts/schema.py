@@ -1,14 +1,12 @@
-"""Shared field mapping and configuration contract for CLI and browser."""
+"""Field mapping."""
 from copy import deepcopy
 
 FAMILIES = ('pipeline', 'elbow', 'blackbox', 'tank')
 CATALOG_NAMES = dict(zip(FAMILIES, ('PipelineTypes', 'ElbowTypes', 'BlackboxTypes', 'TankTypes')))
 FIELDS = []
 
-# aas_path is the stable key of a mapping target; saved configurations refer to it, so it never changes.
-# output lists where build_model actually writes the column. Placeholders: <label> component collection name,
-# <code> type code, <family> component family, <id> joint ID, <type> joint type, <parameter> parameter name.
-# Text in parentheses describes the path and is not part of it. tests/test_audit_regressions.py checks every path.
+# aas_path: stable key for saved settings.
+# output: where the field goes in the AAS.
 def _add(sheet, column, target, label, required=True, output=(), note=''):
     FIELDS.append(dict(excel_sheet=sheet, excel_column=column, aas_path=target, label=label, required=required,
                        output=list(output), note=note))

@@ -1,4 +1,4 @@
-"""Generic Excel-to-AAS mapping: read any workbook, open or create an AAS, map cells and rows into it."""
+"""Excel to AAS mapping."""
 import copy
 import datetime
 import hashlib
@@ -30,17 +30,17 @@ CHILDREN = {'Submodel': 'submodelElements', 'SubmodelElementCollection': 'value'
 CONTAINERS = ('Submodel', 'SubmodelElementCollection', 'SubmodelElementList', 'Entity')
 VALUE_ELEMENTS = ('Property', 'MultiLanguageProperty')
 ROW_ITEMS = ('SubmodelElementCollection', 'Entity')
-GLOBAL_ASSET = '#globalAssetId'  # column target that sets the global asset ID of an entity row
+GLOBAL_ASSET = '#globalAssetId'  # entity asset ID column
 NEW_ELEMENTS = ('Property', 'MultiLanguageProperty', 'SubmodelElementCollection', 'SubmodelElementList')
 VALUE_TYPES = tuple(member.value for member in aas_types.DataTypeDefXSD)
 RELATIONSHIPS = 'http://schemas.openxmlformats.org/package/2006/relationships'
 
 
 class Uncached(str):
-    """Text of a formula cell for which the workbook stores no calculated result."""
+    """Formula without a saved value."""
 
 
-# ---------------------------------------------------------------- Excel tables
+# Excel
 @dataclass
 class Tables:
     sheets: dict
@@ -66,7 +66,6 @@ def guess_type(values):
 
 
 def read_tables(path, source_name=None):
-    """Read every worksheet whose first row holds column headers; problems are reported per sheet."""
     path = Path(path)
     if path.suffix.lower() != '.xlsx':
         raise ValidationError('Only .xlsx is supported. Save legacy .xls files as .xlsx first.')
@@ -149,17 +148,17 @@ def display_cell(value):
     return value if isinstance(value, (int, float)) or value is None else str(value)
 
 
-# ---------------------------------------------------------------- AAS packages
+# Packages
 @dataclass
 class Package:
     env: dict
-    spec_part: str      # ZIP entry of the AAS model part; '' when the source was a plain JSON file
-    spec_format: str    # 'json' or 'xml'
+    spec_part: str      # model file in the ZIP
+    spec_format: str    # json or xml
     filename: str
 
 
 def canonical(env):
-    """Round-trip through aas-core3 so that every stored environment has one normalized JSON form."""
+    """Clean up the model."""
     try:
         return jsonization.to_jsonable(jsonization.environment_from_jsonable(prune(copy.deepcopy(env))))
     except Exception as exc:
@@ -167,7 +166,7 @@ def canonical(env):
 
 
 def prune(node):
-    # The metamodel forbids empty lists; they appear after deleting the last child of an element.
+    # Empty lists are not allowed.
     if isinstance(node, dict):
         for key in [k for k, v in node.items() if isinstance(v, list) and not v]:
             del node[key]
@@ -220,7 +219,7 @@ def _relationship_targets(archive, source, suffix):
 
 
 def load_source(path, filename=None):
-    """Open an AASX package or a plain AAS JSON environment file."""
+    """Open an AASX or JSON file."""
     path = Path(path)
     filename = filename or path.name
     if path.stat().st_size > MAX_AASX_BYTES:
@@ -251,7 +250,7 @@ def load_source(path, filename=None):
 
 
 def write_package(path, env, base=None, package=None):
-    """Write env as an AASX. With a base package, only the AAS model part is replaced; all other parts are copied unchanged."""
+    """Save as AASX."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     patch = base is not None and package is not None and package.spec_part
@@ -307,12 +306,12 @@ def verify(env):
 
 
 def new_failures(before, after):
-    """Metamodel failures introduced by an edit; problems the source AAS already had are not blamed on the import."""
+    """Only new errors."""
     known = set(verify(before))
     return [failure for failure in verify(after) if failure not in known]
 
 
-# ---------------------------------------------------------------- structure
+# Structure
 def new_id():
     return 'urn:uuid:' + str(uuid.uuid4())
 
@@ -411,7 +410,7 @@ def cardinality(node):
 
 
 def tree(env, shell_id, limit=25):
-    """Flatten the selected shell's submodels for the page. Large containers show their first children and a summary line."""
+    """Element list for the page."""
     nodes = []
     def visit(submodel, node, path, depth):
         kind = node.get('modelType')
@@ -451,7 +450,7 @@ def _attach(env, shell_id, submodel):
 
 
 def clear_values(node):
-    # Template values are examples or placeholders; imported data must not be mixed with them.
+    # Template values are examples.
     if isinstance(node, dict):
         if node.get('modelType') in ('Property', 'MultiLanguageProperty', 'File', 'Blob', 'ReferenceElement'):
             node.pop('value', None)
@@ -472,7 +471,6 @@ LEAVES = ('Property', 'MultiLanguageProperty', 'File', 'Blob', 'ReferenceElement
 
 
 def template_cardinality(node):
-    """Cardinality from a template qualifier; only elements that came from a template carry one."""
     return next((q.get('value') for q in node.get('qualifiers', []) if q.get('kind') == 'TemplateQualifier'
                  and q.get('type') in ('SMT/Cardinality', 'Cardinality', 'Multiplicity')), None)
 
@@ -487,13 +485,12 @@ def has_data(node):
         return True
     if kind in CHILDREN:
         return any(has_data(child) for child in items_of(node))
-    # Relationships in a template point to placeholders; other element kinds are kept as they are.
+    # Template links are placeholders.
     return kind not in ('RelationshipElement', 'AnnotatedRelationshipElement')
 
 
 def replaced_placeholder(node, siblings):
-    """An empty template element that repeats (OneToMany) and already has filled entries of the same kind,
-    such as the template's Node entity after rows were imported with it as the row structure."""
+    """Empty placeholder with filled copies."""
     def same_kind(other):
         return (other is not node and other.get('modelType') == node.get('modelType') and other.get('semanticId') == node.get('semanticId')
                 and template_cardinality(other) == template_cardinality(node) and has_data(other))
@@ -515,7 +512,7 @@ def _drop_empty_optional(node, stats):
 
 
 def _requirement_warnings(submodel, found):
-    """Collect (message pattern, path) pairs; list indices become [*] so repeated entries can be counted together."""
+    """Find empty required fields."""
     def visit(node, path):
         kind = node.get('modelType')
         cardinality = template_cardinality(node)
@@ -523,11 +520,11 @@ def _requirement_warnings(submodel, found):
         listed = any(isinstance(s, int) for s in path)
         if path and not has_data(node):
             if cardinality in ('One', 'OneToMany'):
-                # One warning per empty mandatory element; its own children are covered by it.
+                # Report once.
                 found.append((f'Mandatory template element {where} ({cardinality}) ' + ('has no value' if kind in LEAVES else 'is empty'), listed))
                 return
             if cardinality in ('ZeroToOne', 'ZeroToMany'):
-                return  # an unused optional group does not make its mandatory children required
+                return  # Unused optional group.
         if path and kind == 'Entity' and (node.get('globalAssetId') or '').startswith(PLACEHOLDER_ASSET):
             found.append((f'Entity {where} still uses the template placeholder asset ID {node["globalAssetId"]}', listed))
         for i, child in enumerate(items_of(node)):
@@ -537,8 +534,7 @@ def _requirement_warnings(submodel, found):
 
 
 def finalize(env, drop_empty_optional=True):
-    """Prepare a working environment for export: optionally remove empty optional template elements,
-    report mandatory template elements without data, and remove template-only qualifiers (AASd-129)."""
+    """Prepare for export."""
     final = copy.deepcopy(env)
     stats = {'removed': 0}
     if drop_empty_optional:
@@ -556,7 +552,7 @@ def finalize(env, drop_empty_optional=True):
 
 
 def strip_template_qualifiers(node):
-    # Template qualifiers such as SMT/Cardinality are only allowed inside submodel templates (AASd-129).
+    # Only allowed in templates.
     if isinstance(node, dict):
         if 'qualifiers' in node:
             node['qualifiers'] = [q for q in node['qualifiers'] if q.get('kind') != 'TemplateQualifier']
@@ -593,7 +589,7 @@ def add_template_submodel(env, shell_id, template_env, submodel_id, keep_values=
     submodel = copy.deepcopy(source)
     submodel['id'], submodel['kind'] = new_id(), 'Instance'
     _replace_reference_targets(submodel, source['id'], submodel['id'])
-    # Template qualifiers stay in the working copy for cardinality checks; finalize() removes them before export.
+    # Kept for checks, removed on export.
     if not keep_values:
         clear_values(submodel)
     _attach(env, shell_id, prune(submodel))
@@ -647,7 +643,7 @@ def delete_element(env, shell_id, target):
     items.remove(node)
 
 
-# ---------------------------------------------------------------- mapping rules
+# Mapping
 def parse_target(value):
     if not isinstance(value, dict) or not isinstance(value.get('path', []), list) or len(value.get('path', [])) > 64:
         raise ValidationError('A mapping target is invalid.')
@@ -715,7 +711,7 @@ def normalize_rules(rules):
 
 
 def to_xsd(value, value_type):
-    """Convert a cell to the lexical form of an XSD type; None means the cell is empty."""
+    """Cell to AAS value; None if empty."""
     if isinstance(value, Uncached):
         raise ValidationError(f'Formula {value} has no saved result; open and save the file in Excel or paste values.')
     if value is None or (isinstance(value, str) and not value.strip()):
@@ -754,7 +750,7 @@ def to_xsd(value, value_type):
 
 
 def _write(node, cell, language):
-    """Write one cell into a Property, a MultiLanguageProperty or an Entity's global asset ID; returns False for empty cells."""
+    """Write one cell; False if empty."""
     if node.get('modelType') == 'Property':
         value = to_xsd(cell, node.get('valueType', 'xs:string'))
         if value is None:
@@ -785,7 +781,7 @@ def _resolve_relative(node, path):
 
 
 def apply_rules(env, shell_id, tables, rules):
-    """Apply mapping rules to a copy of env. Returns the new environment and a report; errors leave nothing half-written."""
+    """Apply rules to a copy."""
     env = copy.deepcopy(env)
     rules = normalize_rules(rules)
     report = {'errors': [], 'warnings': [], 'values': 0, 'created': 0, 'updated': 0, 'rules': []}
@@ -853,7 +849,7 @@ def _apply_rows(env, rule, index, sheet, container, stats, error):
         error(index, 'Rows can only be imported into lists of collections or entities.', rule['sheet'])
         return
     if not sheet['rows']:
-        # An empty sheet must not wipe the container, which would also remove a template's row structure.
+        # Empty sheet: change nothing.
         stats['unchanged'] = True
         return
     prototype = None
@@ -919,7 +915,7 @@ def _apply_rows(env, rule, index, sheet, container, stats, error):
 
 
 def compare_trees(before, after):
-    """Mark nodes of the result tree that are new or whose value changed."""
+    """Mark changed nodes."""
     old = {json.dumps(n['target'], sort_keys=True): n['value'] for n in before}
     for node in after:
         key = json.dumps(node['target'], sort_keys=True)

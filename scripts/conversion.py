@@ -1,4 +1,4 @@
-"""One validated Excel-to-AAS pipeline, with explicit incomplete-data reporting."""
+"""Assembly workbook to AAS."""
 import copy
 import hashlib
 import io
@@ -46,7 +46,7 @@ def text(value):
     return '' if value is None else str(value).strip()
 
 def plain_number(value):
-    # Text cells must use plain decimal notation; Python would also accept 1_000 or non-ASCII digits.
+    # Plain numbers only.
     return not isinstance(value, str) or DECIMAL.fullmatch(text(value)) is not None
 
 def number(value):
@@ -54,7 +54,7 @@ def number(value):
         if isinstance(value, bool) or not text(value) or not plain_number(value):
             raise ValueError()
         result = float(value)
-        # Reject overflow to infinity and underflow of a nonzero value to zero.
+        # No overflow or underflow.
         if not math.isfinite(result) or (result == 0 and Decimal(text(value)) != 0):
             raise ValueError()
         return result
@@ -97,7 +97,7 @@ def safe_id(value):
     result = re.sub(r'[^A-Za-z0-9_]', '_', raw)
     if not result or not result[0].isalpha():
         result = 'n_' + result
-    # Preserve original valid IDs; transformed IDs carry a collision-resistant suffix.
+    # Changed IDs get a hash.
     if result != raw or len(result) > 100:
         result = result[:90] + '_' + hashlib.sha256(raw.encode()).hexdigest()[:12]
     return result
@@ -113,7 +113,7 @@ def parse_params(value):
         if '=' not in part:
             raise ValidationError(f'Expected parameter name=value: {part!r}')
         key, raw = [p.strip() for p in part.split('=', 1)]
-        # The 100-character limit keeps expanded names within the 128-character AAS idShort limit.
+        # Keep names short.
         if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_. -]{0,99}', key) or key in result:
             raise ValidationError(f'Invalid or duplicate parameter name (ASCII letters, digits, "_", ".", "-" or spaces; at most 100 characters): {key!r}')
         vals = [number(v) for v in raw.split(',')]
@@ -147,7 +147,7 @@ def read_workbook(path, source_name=None):
         if len(wb.sheetnames) > 32:
             raise ValidationError('The workbook contains more than 32 worksheets.')
         for ws in wb:
-            # Notes or helper sheets are not part of the input format and are never read.
+            # Skip other sheets.
             if ws.title not in KNOWN_SHEETS:
                 ignored.append(ws.title)
                 continue
@@ -156,7 +156,7 @@ def read_workbook(path, source_name=None):
             iterator = ws.iter_rows()
             first = next(iterator, ())
             names = [text(c.value) for c in first]
-            # Ignore truly empty trailing columns, but never unnamed populated columns.
+            # Drop empty end columns.
             while names and not names[-1]:
                 names.pop()
             if not names:
@@ -274,7 +274,7 @@ def analyze(workbook, settings=None, bindings=None):
         issue('error','empty_components','The components sheet contains no valid components.','components')
     if not joints:
         issue('warning','empty_joints','No joint records were provided; the output will contain no component connections.','joint_instances')
-    # Duplicates are diagnosed before dictionaries can hide them.
+    # Check duplicates first.
     for sheet, cols in [('components',('assembly_id','label')),('joint_instances',('joint_id',))] + [(f+'_instances',('assembly_id','label')) for f in FAMILIES] + [(f+'_types',('shape_type',)) for f in FAMILIES] + [('joint_types',('joint_type',))]:
         for col in cols:
             seen = set()
@@ -325,7 +325,7 @@ def analyze(workbook, settings=None, bindings=None):
                     missing[label] = absent
                     issue('warning','missing_parameters','Missing required parameters: '+', '.join(absent),sn,row['_row'],'params',label)
             else:
-                # Report once per family/type; build a clearly marked observed catalog entry later.
+                # Report once per type.
                 key = (family,typ)
                 if not any(x.get('code')=='observed_type' and x['field']==f'{family}/{typ}' for x in issues):
                     issue('warning','observed_type',f'{family}/{typ} has no formal type definition. The catalog only records parameters observed in instances.',sn,None,f'{family}/{typ}')
@@ -405,7 +405,7 @@ def analyze(workbook, settings=None, bindings=None):
     return report, context, settings, bindings
 
 def parameter_unit(key, settings):
-    # A suffix explicitly present in the source takes precedence over user defaults.
+    # _mm means millimetres.
     if key.endswith('_mm'):
         return 'mm'
     return text(settings['parameter_units'].get(key))
@@ -530,7 +530,7 @@ def build_model(workbook, settings=None, bindings=None, strict=False):
                 keys=[('AssetAdministrationShell',aasid)] if target in ('Assembly001',name) and target not in instance_by_label else adkey+[('SubmodelElementCollection','Components'),('SubmodelElementCollection',safe_id(target))]
                 children.append(reference(prefix+'Reference',keys))
             if text(row[side+'_sub']):children.append(prop(prefix+'Feature',row[side+'_sub']))
-        # safe_id keeps Joint_1 unchanged and makes negative or very long IDs valid idShorts.
+        # Safe name for any ID.
         joints.append(coll(safe_id('Joint_'+str(integer(row['joint_id']))),children))
     cs=settings['coordinate_system']
     cs_props=[prop(k,v) for k,v in cs.items() if k!='Confirmed']
@@ -561,11 +561,11 @@ def validate_model(model):
         raise ValidationError('Unable to parse the AAS structure: '+str(exc)) from exc
     if failures:
         raise ValidationError('AAS metamodel validation failed: '+'; '.join(failures[:10]))
-    # Check referential integrity independently from the SDK's structural rules.
+    # Check internal links.
     objects={o['id']:o for group in ('assetAdministrationShells','submodels','conceptDescriptions') for o in model.get(group,[])}
     indexes={}
     def find(parent,id_short):
-        # Index each element list once; a linear search per reference is quadratic for large assemblies.
+        # Fast lookup.
         items=parent.get('submodelElements',parent.get('value',[]))
         if not isinstance(items,list):return None
         lookup=indexes.get(id(items))

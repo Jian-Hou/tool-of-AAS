@@ -1,4 +1,4 @@
-"""End-to-end API flow of the mapping page: Excel, template library, new or opened AAS, rules, check, import, download."""
+"""Mapping page API tests."""
 import io
 import json
 from pathlib import Path
@@ -7,8 +7,8 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from app import create_app  # noqa: E402
-from test_aas_mapper import existing_package, read_back, template_package, workbook  # noqa: E402
+from app import create_app
+from test_aas_mapper import existing_package, read_back, template_package, workbook
 
 
 class MapperAppTests(unittest.TestCase):

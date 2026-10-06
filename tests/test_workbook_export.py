@@ -1,4 +1,4 @@
-"""Workbook reading and AASX export using a synthetic .xlsx; no private workbook is required."""
+"""Workbook and export tests."""
 import io
 from pathlib import Path
 import sys
@@ -15,7 +15,7 @@ from conversion import ValidationError, analyze, build_model, read_aasx, read_wo
 from qa import audit
 from schema import default_settings
 
-# A minimal workbook in the assembly input format described in README.md.
+# Minimal example workbook.
 SHEETS = {
     'components': [['assembly_id', 'label', 'tag', 'type', 'shape_type', 'coord', 'placement'],
                    [1, 'demo_pipe_001', 'DEMO', 'pipeline', 'P01', '(0,0,0)', '(0,0,0,1)|0,0,0,100,10,10']],
@@ -82,7 +82,7 @@ class ExportTests(unittest.TestCase):
             store, files = model.DictIdentifiableStore(), DictSupplementaryFileContainer()
             with AASXReader(output, failsafe=False) as reader:
                 reader.read_into(store, files)
-            self.assertEqual(len(store), 1 + 2 + 3)  # shell, two submodels, three parameter concepts
+            self.assertEqual(len(store), 1 + 2 + 3)  # shell, 2 submodels, 3 concepts
             assembly = next(item for item in store if getattr(item, 'id_short', None) == 'AssemblyDefinition')
             self.assertEqual(assembly.get_referable(['Components', 'demo_pipe_001', 'Identity', 'Label']).value, 'demo_pipe_001')
             self.assertEqual(assembly.get_referable(['DataQuality', 'Status']).value, 'draft')

@@ -1,4 +1,4 @@
-"""Command line entry point for the shared, validated conversion pipeline."""
+"""Command line converter."""
 import argparse
 import json
 from pathlib import Path

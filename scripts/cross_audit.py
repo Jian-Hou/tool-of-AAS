@@ -1,4 +1,4 @@
-"""Compatibility entry point; failures now return a nonzero exit code."""
+"""Old name for qa.py."""
 from qa import main
 if __name__ == '__main__':
     raise SystemExit(main())

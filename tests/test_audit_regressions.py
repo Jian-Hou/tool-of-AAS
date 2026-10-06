@@ -1,4 +1,4 @@
-"""Audit regressions using synthetic data only; no private workbook is required."""
+"""Audit tests."""
 import copy
 import hashlib
 from pathlib import Path

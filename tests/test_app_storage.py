@@ -1,4 +1,4 @@
-"""Local project storage must not grow with every upload and export."""
+"""Storage cleanup tests."""
 import io
 from pathlib import Path
 import sys
